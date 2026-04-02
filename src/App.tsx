@@ -13,7 +13,12 @@ import {
   serverTimestamp, 
   getDoc,
   Timestamp,
-  getDocFromServer
+  getDocFromServer,
+  query,
+  orderBy,
+  limit,
+  addDoc,
+  deleteDoc
 } from 'firebase/firestore';
 import { 
   signInWithPopup, 
@@ -33,10 +38,18 @@ import {
   ArrowRight,
   Youtube as YoutubeIcon,
   Copy,
-  Check
+  Check,
+  Search,
+  Send,
+  MessageSquare,
+  Activity as ActivityIcon,
+  X
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { motion, AnimatePresence } from 'motion/react';
+import { format } from 'date-fns';
+import { GoogleGenAI, Type } from "@google/genai";
 import { auth, db } from './firebase';
 
 // --- Utils ---
@@ -111,6 +124,37 @@ function extractVideoId(url: string) {
   return (match && match[7].length === 11) ? match[7] : null;
 }
 
+// --- AI Search ---
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+
+async function searchYouTube(query: string) {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Find the YouTube video ID and title for: "${query}". Return as JSON array of objects with videoId and title.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              videoId: { type: Type.STRING },
+              title: { type: Type.STRING }
+            },
+            required: ["videoId", "title"]
+          }
+        },
+        tools: [{ googleSearch: {} }]
+      }
+    });
+    return JSON.parse(response.text || "[]");
+  } catch (error) {
+    console.error("Search failed:", error);
+    return [];
+  }
+}
+
 // --- Types ---
 interface RoomState {
   videoId: string;
@@ -119,6 +163,29 @@ interface RoomState {
   lastUpdated: Timestamp;
   updatedBy: string;
   name?: string;
+}
+
+interface Message {
+  id: string;
+  text: string;
+  senderId: string;
+  senderName: string;
+  timestamp: Timestamp;
+}
+
+interface Activity {
+  id: string;
+  type: 'join' | 'leave' | 'pause' | 'play' | 'seek' | 'change_video';
+  userId: string;
+  userName: string;
+  timestamp: Timestamp;
+  details?: string;
+}
+
+interface Participant {
+  uid: string;
+  displayName: string;
+  lastSeen: Timestamp;
 }
 
 // --- Components ---
@@ -157,14 +224,97 @@ const Login = () => {
   );
 };
 
+const SearchModal = ({ onSelect, onClose }: { onSelect: (id: string) => void, onClose: () => void }) => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setLoading(true);
+    const res = await searchYouTube(query);
+    setResults(res);
+    setLoading(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-zinc-900 w-full max-w-2xl rounded-3xl border border-zinc-800 overflow-hidden flex flex-col max-h-[80vh]"
+      >
+        <div className="p-6 border-b border-zinc-800 flex items-center justify-between">
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <Search size={20} className="text-red-500" />
+            Search YouTube
+          </h2>
+          <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+        
+        <form onSubmit={handleSearch} className="p-6 bg-zinc-950/50">
+          <div className="relative">
+            <input
+              autoFocus
+              type="text"
+              placeholder="Search for videos..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="w-full bg-zinc-900 border border-zinc-800 px-4 py-3 pl-12 rounded-xl focus:outline-none focus:border-red-600 transition-colors"
+            />
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={20} />
+            <button 
+              type="submit"
+              disabled={loading}
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-red-600 rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50"
+            >
+              {loading ? "..." : "Search"}
+            </button>
+          </div>
+        </form>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {results.map((video) => (
+            <button
+              key={video.videoId}
+              onClick={() => onSelect(video.videoId)}
+              className="w-full flex items-center gap-4 p-3 hover:bg-zinc-800 rounded-2xl transition-colors text-left group"
+            >
+              <div className="w-32 aspect-video bg-zinc-800 rounded-xl overflow-hidden flex-shrink-0">
+                <img 
+                  src={`https://img.youtube.com/vi/${video.videoId}/mqdefault.jpg`} 
+                  alt={video.title}
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-bold text-zinc-200 line-clamp-2">{video.title}</h4>
+                <p className="text-xs text-zinc-500 mt-1 font-mono uppercase">{video.videoId}</p>
+              </div>
+            </button>
+          ))}
+          {!loading && results.length === 0 && query && (
+            <div className="text-center py-12 text-zinc-500">No results found. Try another search.</div>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
   const [roomId, setRoomId] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
 
-  const handleCreateRoom = async () => {
-    const vid = extractVideoId(videoUrl);
-    if (!vid) {
-      alert("Please enter a valid YouTube URL");
+  const handleCreateRoom = async (vid?: string) => {
+    const finalVid = vid || extractVideoId(videoUrl);
+    if (!finalVid) {
+      alert("Please enter a valid YouTube URL or use search");
       return;
     }
 
@@ -173,12 +323,12 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
     
     try {
       await setDoc(roomRef, {
-        videoId: vid,
+        videoId: finalVid,
         currentTime: 0,
         isPlaying: false,
         lastUpdated: serverTimestamp(),
         updatedBy: auth.currentUser?.uid,
-        name: "New Party"
+        name: "Watch Party"
       });
       onJoinRoom(newRoomId);
     } catch (error) {
@@ -188,10 +338,19 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white p-6 flex flex-col items-center justify-center">
+      {isSearching && (
+        <SearchModal 
+          onSelect={(id) => {
+            setIsSearching(false);
+            handleCreateRoom(id);
+          }} 
+          onClose={() => setIsSearching(false)} 
+        />
+      )}
       <div className="max-w-xl w-full space-y-12">
         <header className="text-center space-y-2">
           <h1 className="text-5xl font-black tracking-tighter italic">SYNC<span className="text-red-600">TUBE</span></h1>
-          <p className="text-zinc-500 font-medium">Start a party or join an existing one.</p>
+          <p className="text-zinc-500 font-medium">Watch YouTube with friends, perfectly in sync.</p>
         </header>
 
         <div className="grid md:grid-cols-2 gap-8">
@@ -209,12 +368,21 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
                 onChange={(e) => setVideoUrl(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-red-600 transition-colors"
               />
-              <button
-                onClick={handleCreateRoom}
-                className="w-full py-3 bg-red-600 hover:bg-red-700 font-bold rounded-xl transition-all active:scale-[0.98]"
-              >
-                Start Party
-              </button>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setIsSearching(true)}
+                  className="py-3 bg-zinc-800 hover:bg-zinc-700 font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+                >
+                  <Search size={18} />
+                  Search
+                </button>
+                <button
+                  onClick={() => handleCreateRoom()}
+                  className="py-3 bg-red-600 hover:bg-red-700 font-bold rounded-xl transition-all"
+                >
+                  Start
+                </button>
+              </div>
             </div>
           </div>
 
@@ -250,61 +418,131 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [player, setPlayer] = useState<any>(null);
   const [copied, setCopied] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [activeTab, setActiveTab] = useState<'chat' | 'activity'>('chat');
+  
   const isUpdatingRef = useRef(false);
-  const lastSyncTimeRef = useRef(0);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // --- Presence & Activity ---
+  useEffect(() => {
+    if (!auth.currentUser) return;
+    
+    const participantRef = doc(db, 'rooms', roomId, 'participants', auth.currentUser.uid);
+    const updatePresence = async () => {
+      await setDoc(participantRef, {
+        uid: auth.currentUser?.uid,
+        displayName: auth.currentUser?.displayName,
+        lastSeen: serverTimestamp()
+      }, { merge: true });
+    };
+
+    updatePresence();
+    const interval = setInterval(updatePresence, 30000); // Update every 30s
+
+    const addActivity = async (type: Activity['type'], details?: string) => {
+      const activitiesRef = collection(db, 'rooms', roomId, 'activities');
+      await addDoc(activitiesRef, {
+        type,
+        userId: auth.currentUser?.uid,
+        userName: auth.currentUser?.displayName,
+        timestamp: serverTimestamp(),
+        details
+      });
+    };
+
+    addActivity('join');
+
+    return () => {
+      clearInterval(interval);
+      deleteDoc(participantRef);
+      addActivity('leave');
+    };
+  }, [roomId]);
+
+  // --- Subscriptions ---
   useEffect(() => {
     const roomRef = doc(db, 'rooms', roomId);
-    const unsubscribe = onSnapshot(roomRef, (snapshot) => {
+    const messagesRef = collection(db, 'rooms', roomId, 'messages');
+    const activitiesRef = collection(db, 'rooms', roomId, 'activities');
+    const participantsRef = collection(db, 'rooms', roomId, 'participants');
+
+    const unsubRoom = onSnapshot(roomRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data() as RoomState;
         setRoom(data);
-        
-        // Sync player if not the one who updated
         if (data.updatedBy !== auth.currentUser?.uid && player) {
           isUpdatingRef.current = true;
-          
-          // Sync play/pause
-          if (data.isPlaying) {
-            player.playVideo();
-          } else {
-            player.pauseVideo();
-          }
-
-          // Sync time if difference is > 2 seconds
+          if (data.isPlaying) player.playVideo(); else player.pauseVideo();
           const localTime = player.getCurrentTime();
-          if (Math.abs(localTime - data.currentTime) > 2) {
-            player.seekTo(data.currentTime, true);
-          }
-
-          setTimeout(() => {
-            isUpdatingRef.current = false;
-          }, 500);
+          if (Math.abs(localTime - data.currentTime) > 2) player.seekTo(data.currentTime, true);
+          setTimeout(() => { isUpdatingRef.current = false; }, 500);
         }
       } else {
-        alert("Room not found");
         onLeave();
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `rooms/${roomId}`);
     });
 
-    return () => unsubscribe();
+    const unsubMessages = onSnapshot(query(messagesRef, orderBy('timestamp', 'asc'), limit(50)), (snapshot) => {
+      setMessages(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Message)));
+    });
+
+    const unsubActivities = onSnapshot(query(activitiesRef, orderBy('timestamp', 'desc'), limit(20)), (snapshot) => {
+      setActivities(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Activity)));
+    });
+
+    const unsubParticipants = onSnapshot(participantsRef, (snapshot) => {
+      setParticipants(snapshot.docs.map(d => d.data() as Participant));
+    });
+
+    return () => {
+      unsubRoom();
+      unsubMessages();
+      unsubActivities();
+      unsubParticipants();
+    };
   }, [roomId, player, onLeave]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   const updateRoomState = async (updates: Partial<RoomState>) => {
     if (isUpdatingRef.current) return;
-    
     const roomRef = doc(db, 'rooms', roomId);
-    try {
-      await updateDoc(roomRef, {
-        ...updates,
-        lastUpdated: serverTimestamp(),
-        updatedBy: auth.currentUser?.uid
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `rooms/${roomId}`);
-    }
+    await updateDoc(roomRef, {
+      ...updates,
+      lastUpdated: serverTimestamp(),
+      updatedBy: auth.currentUser?.uid
+    });
+  };
+
+  const addActivity = async (type: Activity['type'], details?: string) => {
+    const activitiesRef = collection(db, 'rooms', roomId, 'activities');
+    await addDoc(activitiesRef, {
+      type,
+      userId: auth.currentUser?.uid,
+      userName: auth.currentUser?.displayName,
+      timestamp: serverTimestamp(),
+      details
+    });
+  };
+
+  const sendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+    const messagesRef = collection(db, 'rooms', roomId, 'messages');
+    await addDoc(messagesRef, {
+      text: chatInput,
+      senderId: auth.currentUser?.uid,
+      senderName: auth.currentUser?.displayName,
+      timestamp: serverTimestamp()
+    });
+    setChatInput('');
   };
 
   const onPlayerReady: YouTubeProps['onReady'] = (event) => {
@@ -313,13 +551,16 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
   const onPlayerStateChange: YouTubeProps['onStateChange'] = (event) => {
     if (isUpdatingRef.current) return;
-
     const newState = event.data;
     const isPlaying = newState === YouTube.PlayerState.PLAYING;
     const currentTime = event.target.getCurrentTime();
 
-    if (newState === YouTube.PlayerState.PLAYING || newState === YouTube.PlayerState.PAUSED) {
+    if (newState === YouTube.PlayerState.PLAYING) {
       updateRoomState({ isPlaying, currentTime });
+      addActivity('play');
+    } else if (newState === YouTube.PlayerState.PAUSED) {
+      updateRoomState({ isPlaying, currentTime });
+      addActivity('pause');
     }
   };
 
@@ -332,48 +573,70 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   if (!room) return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-white">Loading Party...</div>;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white flex flex-col">
+    <div className="min-h-screen bg-zinc-950 text-white flex flex-col h-screen overflow-hidden">
+      {isSearching && (
+        <SearchModal 
+          onSelect={(id) => {
+            setIsSearching(false);
+            updateRoomState({ videoId: id, currentTime: 0, isPlaying: false });
+            addActivity('change_video', id);
+          }} 
+          onClose={() => setIsSearching(false)} 
+        />
+      )}
+
       {/* Header */}
-      <header className="p-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-950/80 backdrop-blur-md sticky top-0 z-10">
+      <header className="p-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-950/80 backdrop-blur-md z-10 shrink-0">
         <div className="flex items-center gap-4">
           <button onClick={onLeave} className="p-2 hover:bg-zinc-900 rounded-lg transition-colors">
             <LogOut size={20} className="rotate-180" />
           </button>
-          <div>
+          <div className="hidden sm:block">
             <h2 className="font-bold text-lg leading-tight">{room.name || "Watch Party"}</h2>
             <p className="text-xs text-zinc-500 font-mono uppercase tracking-wider">{roomId}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={() => setIsSearching(true)}
+            className="p-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl transition-all text-zinc-400 hover:text-white"
+          >
+            <Search size={20} />
+          </button>
           <button 
             onClick={handleCopyLink}
             className="flex items-center gap-2 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-sm font-medium transition-all"
           >
             {copied ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
-            {copied ? "Copied!" : "Copy ID"}
+            <span className="hidden sm:inline">{copied ? "Copied!" : "Copy ID"}</span>
           </button>
-          <div className="w-10 h-10 rounded-full bg-red-600 flex items-center justify-center font-bold border-2 border-zinc-950 ring-2 ring-red-600/20">
-            {auth.currentUser?.displayName?.[0] || "U"}
+          <div className="flex -space-x-2">
+            {participants.slice(0, 3).map((p, i) => (
+              <div key={p.uid} className="w-10 h-10 rounded-full bg-zinc-800 border-2 border-zinc-950 flex items-center justify-center text-xs font-bold" title={p.displayName}>
+                {p.displayName[0]}
+              </div>
+            ))}
+            {participants.length > 3 && (
+              <div className="w-10 h-10 rounded-full bg-zinc-900 border-2 border-zinc-950 flex items-center justify-center text-xs font-bold text-zinc-500">
+                +{participants.length - 3}
+              </div>
+            )}
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col lg:flex-row gap-6 p-6 max-w-[1600px] mx-auto w-full">
+      <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* Player Section */}
-        <div className="flex-1 space-y-6">
-          <div className="aspect-video bg-black rounded-3xl overflow-hidden shadow-2xl border border-zinc-900">
+        <div className="flex-1 flex flex-col p-4 sm:p-6 overflow-y-auto min-h-0">
+          <div className="aspect-video bg-black rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0">
             <YouTube
               videoId={room.videoId}
               opts={{
                 width: '100%',
                 height: '100%',
-                playerVars: {
-                  autoplay: 0,
-                  controls: 1,
-                  modestbranding: 1,
-                  rel: 0,
-                },
+                playerVars: { autoplay: 0, controls: 1, modestbranding: 1, rel: 0 },
               }}
               onReady={onPlayerReady}
               onStateChange={onPlayerStateChange}
@@ -381,37 +644,159 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             />
           </div>
           
-          <div className="bg-zinc-900/50 p-6 rounded-3xl border border-zinc-800 flex items-center justify-between">
+          <div className="mt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-zinc-900/30 p-6 rounded-3xl border border-zinc-800/50">
             <div className="flex items-center gap-4">
               <div className={cn(
-                "w-3 h-3 rounded-full animate-pulse",
-                room.isPlaying ? "bg-green-500" : "bg-zinc-500"
+                "w-3 h-3 rounded-full animate-pulse shadow-[0_0_10px_rgba(0,0,0,0.5)]",
+                room.isPlaying ? "bg-green-500 shadow-green-500/50" : "bg-zinc-500"
               )} />
-              <span className="font-medium text-zinc-300">
-                {room.isPlaying ? "Playing Now" : "Paused"}
-              </span>
+              <div>
+                <span className="font-bold text-lg block">
+                  {room.isPlaying ? "Live Now" : "Paused"}
+                </span>
+                <span className="text-sm text-zinc-500">
+                  {participants.length} watching together
+                </span>
+              </div>
             </div>
-            <div className="flex items-center gap-2 text-zinc-500 text-sm">
-              <Users size={16} />
-              <span>Synced with friends</span>
+            <div className="flex items-center gap-6">
+              <div className="text-right hidden sm:block">
+                <p className="text-xs text-zinc-500 uppercase font-mono tracking-widest">Last Sync</p>
+                <p className="text-sm font-medium">{format(room.lastUpdated?.toDate() || new Date(), 'HH:mm:ss')}</p>
+              </div>
+              <div className="flex items-center gap-2 text-red-500 bg-red-500/10 px-4 py-2 rounded-xl border border-red-500/20">
+                <Users size={18} />
+                <span className="font-bold">{participants.length}</span>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Sidebar / Info */}
-        <div className="w-full lg:w-80 space-y-6">
-          <div className="bg-zinc-900/50 p-6 rounded-3xl border border-zinc-800 h-full">
-            <h3 className="font-bold mb-4 flex items-center gap-2">
-              <Share2 size={18} className="text-red-500" />
-              Invite Friends
-            </h3>
-            <p className="text-sm text-zinc-400 mb-6">
-              Share this Room ID with your friends to watch together.
-            </p>
-            <div className="p-4 bg-zinc-950 rounded-2xl border border-zinc-800 font-mono text-center text-xl tracking-widest text-red-500">
-              {roomId}
-            </div>
+        {/* Sidebar (Chat & Activity) */}
+        <div className="w-full lg:w-[400px] border-l border-zinc-900 flex flex-col bg-zinc-950 shrink-0 h-full lg:h-auto">
+          <div className="flex border-b border-zinc-900">
+            <button 
+              onClick={() => setActiveTab('chat')}
+              className={cn(
+                "flex-1 py-4 font-bold text-sm transition-all border-b-2",
+                activeTab === 'chat' ? "text-white border-red-600 bg-red-600/5" : "text-zinc-500 border-transparent hover:text-zinc-300"
+              )}
+            >
+              <div className="flex items-center justify-center gap-2">
+                <MessageSquare size={18} />
+                CHAT
+              </div>
+            </button>
+            <button 
+              onClick={() => setActiveTab('activity')}
+              className={cn(
+                "flex-1 py-4 font-bold text-sm transition-all border-b-2",
+                activeTab === 'activity' ? "text-white border-red-600 bg-red-600/5" : "text-zinc-500 border-transparent hover:text-zinc-300"
+              )}
+            >
+              <div className="flex items-center justify-center gap-2">
+                <ActivityIcon size={18} />
+                ACTIVITY
+              </div>
+            </button>
           </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
+            {activeTab === 'chat' ? (
+              <div className="space-y-4">
+                {messages.map((msg) => (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    key={msg.id} 
+                    className={cn(
+                      "flex flex-col gap-1",
+                      msg.senderId === auth.currentUser?.uid ? "items-end" : "items-start"
+                    )}
+                  >
+                    <div className="flex items-center gap-2 px-1">
+                      <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-tighter">
+                        {msg.senderName}
+                      </span>
+                      <span className="text-[10px] text-zinc-600">
+                        {msg.timestamp ? format(msg.timestamp.toDate(), 'HH:mm') : ''}
+                      </span>
+                    </div>
+                    <div className={cn(
+                      "px-4 py-2 rounded-2xl max-w-[85%] text-sm",
+                      msg.senderId === auth.currentUser?.uid 
+                        ? "bg-red-600 text-white rounded-tr-none" 
+                        : "bg-zinc-900 text-zinc-200 rounded-tl-none"
+                    )}>
+                      {msg.text}
+                    </div>
+                  </motion.div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {activities.map((act) => (
+                  <motion.div 
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    key={act.id} 
+                    className="flex items-start gap-3 p-3 bg-zinc-900/30 rounded-2xl border border-zinc-900"
+                  >
+                    <div className={cn(
+                      "p-2 rounded-lg shrink-0",
+                      act.type === 'join' ? "bg-green-500/10 text-green-500" :
+                      act.type === 'leave' ? "bg-red-500/10 text-red-500" :
+                      act.type === 'pause' ? "bg-yellow-500/10 text-yellow-500" :
+                      act.type === 'play' ? "bg-blue-500/10 text-blue-500" :
+                      "bg-zinc-500/10 text-zinc-500"
+                    )}>
+                      {act.type === 'join' ? <Users size={14} /> :
+                       act.type === 'leave' ? <LogOut size={14} /> :
+                       act.type === 'pause' ? <Pause size={14} /> :
+                       act.type === 'play' ? <Play size={14} /> :
+                       <ActivityIcon size={14} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-zinc-300">
+                        <span className="font-bold text-white">{act.userName}</span>
+                        {' '}
+                        {act.type === 'join' ? 'joined the party' :
+                         act.type === 'leave' ? 'left the party' :
+                         act.type === 'pause' ? 'paused the video' :
+                         act.type === 'play' ? 'started the video' :
+                         act.type === 'seek' ? 'skipped ahead' :
+                         'changed the video'}
+                      </p>
+                      <p className="text-[10px] text-zinc-600 mt-1">
+                        {act.timestamp ? format(act.timestamp.toDate(), 'HH:mm:ss') : ''}
+                      </p>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {activeTab === 'chat' && (
+            <form onSubmit={sendMessage} className="p-4 border-t border-zinc-900 bg-zinc-950 shrink-0">
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Type a message..."
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 px-4 py-3 pr-12 rounded-2xl focus:outline-none focus:border-red-600 transition-colors text-sm"
+                />
+                <button 
+                  type="submit"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-red-600 hover:bg-red-600/10 rounded-xl transition-all"
+                >
+                  <Send size={18} />
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       </main>
     </div>

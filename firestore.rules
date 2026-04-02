@@ -19,6 +19,27 @@
 //   - updatedBy: string (required) - UID of the user who updated
 //   - name: string (optional) - Room name
 //
+// Subcollection: rooms/{roomId}/messages
+// Fields:
+//   - text: string (required) - Chat message text
+//   - senderId: string (required) - UID of the sender
+//   - senderName: string (required) - Name of the sender
+//   - timestamp: timestamp (required) - When the message was sent
+//
+// Subcollection: rooms/{roomId}/activities
+// Fields:
+//   - type: string (required) - join, leave, pause, play, seek, change_video
+//   - userId: string (required) - UID of the user
+//   - userName: string (required) - Name of the user
+//   - timestamp: timestamp (required) - When the activity happened
+//   - details: string (optional) - Additional details
+//
+// Subcollection: rooms/{roomId}/participants
+// Fields:
+//   - uid: string (required) - User UID
+//   - displayName: string (required) - User display name
+//   - lastSeen: timestamp (required) - Last activity time
+//
 // ===============================================================
 
 rules_version = '2';
@@ -52,6 +73,29 @@ service cloud.firestore {
              data.updatedBy is string && data.updatedBy == request.auth.uid;
     }
 
+    function isValidMessage(data) {
+      return data.keys().hasAll(['text', 'senderId', 'senderName', 'timestamp']) &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 1000 &&
+             data.senderId == request.auth.uid &&
+             data.senderName is string &&
+             data.timestamp is timestamp;
+    }
+
+    function isValidActivity(data) {
+      return data.keys().hasAll(['type', 'userId', 'userName', 'timestamp']) &&
+             data.type in ['join', 'leave', 'pause', 'play', 'seek', 'change_video'] &&
+             data.userId == request.auth.uid &&
+             data.userName is string &&
+             data.timestamp is timestamp;
+    }
+
+    function isValidParticipant(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'lastSeen']) &&
+             data.uid == request.auth.uid &&
+             data.displayName is string &&
+             data.lastSeen is timestamp;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -65,7 +109,23 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidRoom(request.resource.data);
       allow update: if isAuthenticated() && isValidRoom(request.resource.data);
-      allow delete: if isAuthenticated(); // For now, anyone can delete if they are in the room? Maybe restricted later.
+      allow delete: if isAuthenticated();
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidMessage(request.resource.data);
+      }
+
+      match /activities/{activityId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidActivity(request.resource.data);
+      }
+
+      match /participants/{participantId} {
+        allow read: if isAuthenticated();
+        allow create, update: if isAuthenticated() && isValidParticipant(request.resource.data);
+        allow delete: if isAuthenticated() && participantId == request.auth.uid;
+      }
     }
   }
 }

@@ -52,12 +52,60 @@
         }
       },
       "required": ["uid", "displayName"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message in a room",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["text", "senderId", "senderName", "timestamp"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "An activity log entry",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["join", "leave", "pause", "play", "seek", "change_video"] },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "details": { "type": "string" }
+      },
+      "required": ["type", "userId", "userName", "timestamp"]
+    },
+    "Participant": {
+      "title": "Participant",
+      "description": "A user currently in a room",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "lastSeen": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "lastSeen"]
     }
   },
   "firestore": {
     "/rooms/{roomId}": {
       "schema": "Room",
       "description": "Watch party rooms"
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Chat messages"
+    },
+    "/rooms/{roomId}/activities/{activityId}": {
+      "schema": "Activity",
+      "description": "Activity logs"
+    },
+    "/rooms/{roomId}/participants/{participantId}": {
+      "schema": "Participant",
+      "description": "Current participants"
     },
     "/users/{userId}": {
       "schema": "User",
