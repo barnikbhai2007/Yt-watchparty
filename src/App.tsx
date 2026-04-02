@@ -129,9 +129,16 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 async function searchYouTube(query: string) {
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      console.error("GEMINI_API_KEY is missing");
+      return [];
+    }
+
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `Find the YouTube video ID and title for: "${query}". Return as JSON array of objects with videoId and title.`,
+      contents: `Search for the top 5 YouTube videos for: "${query}". 
+      Return a JSON array of objects with "videoId" and "title". 
+      Focus on finding the correct 11-character video IDs.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -148,7 +155,21 @@ async function searchYouTube(query: string) {
         tools: [{ googleSearch: {} }]
       }
     });
-    return JSON.parse(response.text || "[]");
+
+    const text = response.text;
+    console.log("Search response:", text);
+    
+    if (!text) return [];
+
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      console.error("JSON parse error:", e);
+      // Fallback: try to extract JSON from text if it's wrapped in markdown
+      const match = text.match(/\[.*\]/s);
+      if (match) return JSON.parse(match[0]);
+      return [];
+    }
   } catch (error) {
     console.error("Search failed:", error);
     return [];
@@ -163,6 +184,8 @@ interface RoomState {
   lastUpdated: Timestamp;
   updatedBy: string;
   name?: string;
+  mediaType: 'youtube' | 'spotify';
+  spotifyUri?: string;
 }
 
 interface Message {
@@ -228,12 +251,17 @@ const SearchModal = ({ onSelect, onClose }: { onSelect: (id: string) => void, on
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
     setLoading(true);
+    setError(null);
     const res = await searchYouTube(query);
+    if (res.length === 0) {
+      setError("No results found or search failed. Please try again.");
+    }
     setResults(res);
     setLoading(false);
   };
@@ -277,6 +305,11 @@ const SearchModal = ({ onSelect, onClose }: { onSelect: (id: string) => void, on
         </form>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {error && (
+            <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-500 text-sm text-center">
+              {error}
+            </div>
+          )}
           {results.map((video) => (
             <button
               key={video.videoId}
@@ -328,7 +361,8 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
         isPlaying: false,
         lastUpdated: serverTimestamp(),
         updatedBy: auth.currentUser?.uid,
-        name: "Watch Party"
+        name: "Watch Party",
+        mediaType: 'youtube'
       });
       onJoinRoom(newRoomId);
     } catch (error) {
@@ -514,22 +548,31 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const updateRoomState = async (updates: Partial<RoomState>) => {
     if (isUpdatingRef.current) return;
     const roomRef = doc(db, 'rooms', roomId);
-    await updateDoc(roomRef, {
-      ...updates,
-      lastUpdated: serverTimestamp(),
-      updatedBy: auth.currentUser?.uid
-    });
+    try {
+      await updateDoc(roomRef, {
+        ...updates,
+        lastUpdated: serverTimestamp(),
+        updatedBy: auth.currentUser?.uid
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `rooms/${roomId}`);
+    }
   };
 
   const addActivity = async (type: Activity['type'], details?: string) => {
+    if (!auth.currentUser) return;
     const activitiesRef = collection(db, 'rooms', roomId, 'activities');
-    await addDoc(activitiesRef, {
-      type,
-      userId: auth.currentUser?.uid,
-      userName: auth.currentUser?.displayName,
-      timestamp: serverTimestamp(),
-      details
-    });
+    try {
+      await addDoc(activitiesRef, {
+        type,
+        userId: auth.currentUser.uid,
+        userName: auth.currentUser.displayName || 'Anonymous',
+        timestamp: serverTimestamp(),
+        details: details || ''
+      });
+    } catch (error) {
+      console.error("Failed to add activity:", error);
+    }
   };
 
   const sendMessage = async (e: React.FormEvent) => {
@@ -561,6 +604,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     } else if (newState === YouTube.PlayerState.PAUSED) {
       updateRoomState({ isPlaying, currentTime });
       addActivity('pause');
+    } else if (newState === YouTube.PlayerState.BUFFERING) {
+      // Potentially a skip or seek
+      const diff = Math.abs(currentTime - (room?.currentTime || 0));
+      if (diff > 2) {
+        updateRoomState({ currentTime });
+        addActivity('seek', `to ${Math.floor(currentTime)}s`);
+      }
     }
   };
 
@@ -630,18 +680,78 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* Player Section */}
         <div className="flex-1 flex flex-col p-4 sm:p-6 overflow-y-auto min-h-0">
+          <div className="flex gap-2 mb-4">
+            <button 
+              onClick={() => updateRoomState({ mediaType: 'youtube' })}
+              className={cn(
+                "px-4 py-2 rounded-xl text-xs font-bold transition-all",
+                room.mediaType === 'youtube' ? "bg-red-600 text-white" : "bg-zinc-900 text-zinc-500"
+              )}
+            >
+              YOUTUBE
+            </button>
+            <button 
+              onClick={() => updateRoomState({ mediaType: 'spotify' })}
+              className={cn(
+                "px-4 py-2 rounded-xl text-xs font-bold transition-all",
+                room.mediaType === 'spotify' ? "bg-green-600 text-white" : "bg-zinc-900 text-zinc-500"
+              )}
+            >
+              SPOTIFY
+            </button>
+          </div>
+
           <div className="aspect-video bg-black rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0">
-            <YouTube
-              videoId={room.videoId}
-              opts={{
-                width: '100%',
-                height: '100%',
-                playerVars: { autoplay: 0, controls: 1, modestbranding: 1, rel: 0 },
-              }}
-              onReady={onPlayerReady}
-              onStateChange={onPlayerStateChange}
-              className="w-full h-full"
-            />
+            {room.mediaType === 'youtube' ? (
+              <YouTube
+                videoId={room.videoId}
+                opts={{
+                  width: '100%',
+                  height: '100%',
+                  playerVars: { autoplay: 0, controls: 1, modestbranding: 1, rel: 0 },
+                }}
+                onReady={onPlayerReady}
+                onStateChange={onPlayerStateChange}
+                className="w-full h-full"
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center p-8 bg-zinc-900/50">
+                <div className="w-full max-w-md space-y-4">
+                  <div className="flex items-center gap-3 text-green-500 mb-6">
+                    <div className="p-3 bg-green-500/10 rounded-2xl">
+                      <Plus size={24} />
+                    </div>
+                    <h3 className="text-xl font-bold">Spotify Jam</h3>
+                  </div>
+                  <input 
+                    type="text"
+                    placeholder="Paste Spotify Track/Playlist URL"
+                    className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-green-600 transition-colors"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const val = (e.target as HTMLInputElement).value;
+                        if (val.includes('spotify.com')) {
+                          const uri = val.split('?')[0].split('/').pop();
+                          const type = val.includes('playlist') ? 'playlist' : 'track';
+                          updateRoomState({ spotifyUri: `spotify:${type}:${uri}` });
+                          addActivity('change_video', `Spotify: ${type}`);
+                        }
+                      }
+                    }}
+                  />
+                  {room.spotifyUri && (
+                    <iframe 
+                      src={`https://open.spotify.com/embed/${room.spotifyUri.split(':')[1]}/${room.spotifyUri.split(':')[2]}`}
+                      width="100%" 
+                      height="380" 
+                      frameBorder="0" 
+                      allow="encrypted-media"
+                      className="rounded-2xl shadow-2xl"
+                    />
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           
           <div className="mt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-zinc-900/30 p-6 rounded-3xl border border-zinc-800/50">
