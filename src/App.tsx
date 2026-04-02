@@ -221,7 +221,7 @@ const Login = () => {
   );
 };
 
-const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'music') => void }) => {
+const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'music') => void }) => {
   const [roomId, setRoomId] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
   const [lobbyType, setLobbyType] = useState<'youtube' | 'music'>('youtube');
@@ -348,7 +348,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'mus
                 />
               </div>
               <button
-                onClick={() => roomId && onJoinRoom(roomId, 'youtube')}
+                onClick={() => roomId && onJoinRoom(roomId)}
                 className="w-full py-3 bg-zinc-100 text-black hover:bg-white font-bold rounded-xl transition-all active:scale-[0.98]"
               >
                 Join Party
@@ -607,7 +607,15 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     setSearchResults([]);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      // Support both AI Studio and Vercel environments
+      const meta = import.meta as any;
+      const apiKey = (meta.env && meta.env.VITE_GEMINI_API_KEY) || (process.env && process.env.GEMINI_API_KEY);
+      
+      if (!apiKey) {
+        throw new Error("Gemini API key not found. If you are on Vercel, please set VITE_GEMINI_API_KEY in your environment variables.");
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Find 5 YouTube video IDs for: "${searchInput}". Return ONLY a JSON array of objects: [{"id": "...", "title": "...", "thumbnail": "https://img.youtube.com/vi/ID/0.jpg", "url": "https://www.youtube.com/watch?v=ID"}]. Do not use any tools.`,
@@ -820,26 +828,33 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                   </motion.div>
 
                   <div className="space-y-2">
-                    <h3 className="text-xl sm:text-2xl font-black tracking-tight truncate w-full">
+                    <h3 className="text-xl sm:text-2xl font-black tracking-tight truncate w-full px-4">
                       {room.name || "Music Jam"}
                     </h3>
-                    <p className="text-blue-400 font-bold text-xs uppercase tracking-widest">YT Music Mode</p>
+                    <p className="text-blue-400 font-bold text-[10px] uppercase tracking-[0.2em]">YT Music Mode</p>
                   </div>
 
-                  <button
-                    onClick={() => {
-                      if (room.isPlaying) {
-                        player?.pauseVideo();
-                        updateRoomState({ isPlaying: false });
-                      } else {
-                        player?.playVideo();
-                        updateRoomState({ isPlaying: true });
-                      }
-                    }}
-                    className="p-4 bg-white text-black rounded-full hover:scale-105 transition-transform shadow-xl"
-                  >
-                    {room.isPlaying ? <Pause size={32} /> : <Play size={32} />}
-                  </button>
+                  <div className="flex items-center justify-center gap-8 pt-4">
+                    <button
+                      onClick={() => {
+                        if (!player) return;
+                        if (room.isPlaying) {
+                          player.pauseVideo();
+                          updateRoomState({ isPlaying: false });
+                        } else {
+                          player.playVideo();
+                          updateRoomState({ isPlaying: true });
+                        }
+                      }}
+                      disabled={!player}
+                      className={cn(
+                        "w-20 h-20 flex items-center justify-center bg-white text-black rounded-full hover:scale-110 transition-all shadow-[0_0_50px_rgba(255,255,255,0.2)] active:scale-95 z-50",
+                        !player && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      {room.isPlaying ? <Pause size={40} fill="currentColor" /> : <Play size={40} fill="currentColor" className="ml-1" />}
+                    </button>
+                  </div>
 
                   {/* Hidden Player for Audio Sync */}
                   <div className="opacity-0 pointer-events-none absolute inset-0">
