@@ -124,7 +124,7 @@ function extractVideoId(url: string) {
   return (match && match[7].length === 11) ? match[7] : null;
 }
 
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 
 // --- Utils ---
 function extractSoundCloudUrl(input: string) {
@@ -607,25 +607,14 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     setSearchResults([]);
 
     try {
-      // Support both AI Studio and Vercel environments
-      const meta = import.meta as any;
-      const apiKey = (meta.env && meta.env.VITE_GEMINI_API_KEY) || (process.env && process.env.GEMINI_API_KEY);
+      // Using the user's custom yt-search backend
+      const response = await fetch(`https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(searchInput)}`);
       
-      if (!apiKey) {
-        throw new Error("Gemini API key not found. If you are on Vercel, please set VITE_GEMINI_API_KEY in your environment variables.");
+      if (!response.ok) {
+        throw new Error("Search API request failed");
       }
 
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Find 5 YouTube video IDs for: "${searchInput}". Return ONLY a JSON array of objects: [{"id": "...", "title": "...", "thumbnail": "https://img.youtube.com/vi/ID/0.jpg", "url": "https://www.youtube.com/watch?v=ID"}]. Do not use any tools.`,
-        config: {
-          responseMimeType: "application/json",
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
-        }
-      });
-
-      const results = JSON.parse(response.text || "[]");
+      const results = await response.json();
       setSearchResults(results);
     } catch (error) {
       console.error("Search failed:", error);
