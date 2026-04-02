@@ -1,0 +1,5 @@
+{
+  "name": "SyncTube",
+  "description": "Watch YouTube videos in real-time with your friends. Synchronized playback and simple room sharing.",
+  "requestFramePermissions": []
+}

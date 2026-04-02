@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "A watch party room",
+      "type": "object",
+      "properties": {
+        "videoId": {
+          "type": "string",
+          "description": "The YouTube video ID"
+        },
+        "currentTime": {
+          "type": "number",
+          "description": "Current playback time in seconds"
+        },
+        "isPlaying": {
+          "type": "boolean",
+          "description": "Whether the video is currently playing"
+        },
+        "lastUpdated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last time the state was updated"
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "UID of the user who last updated the state"
+        },
+        "name": {
+          "type": "string",
+          "description": "Room name"
+        }
+      },
+      "required": ["videoId", "currentTime", "isPlaying", "lastUpdated", "updatedBy"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "User UID"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name"
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "User photo URL"
+        }
+      },
+      "required": ["uid", "displayName"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Watch party rooms"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    }
+  }
+}
