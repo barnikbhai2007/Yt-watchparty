@@ -43,13 +43,13 @@ import {
   Send,
   MessageSquare,
   Activity as ActivityIcon,
-  X
+  X,
+  List
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
-import { GoogleGenAI, Type } from "@google/genai";
 import { auth, db } from './firebase';
 
 // --- Utils ---
@@ -124,108 +124,18 @@ function extractVideoId(url: string) {
   return (match && match[7].length === 11) ? match[7] : null;
 }
 
-// --- AI Search ---
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-
-async function searchYouTube(query: string) {
-  try {
-    if (!process.env.GEMINI_API_KEY) {
-      console.error("GEMINI_API_KEY is missing");
-      return [];
-    }
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Search for the top 5 YouTube videos for: "${query}". 
-      Return a JSON array of objects with "videoId" and "title". 
-      Make sure the videoId is the correct 11-character string from the URL.
-      Example: { "videoId": "dQw4w9WgXcQ", "title": "Rick Astley - Never Gonna Give You Up" }`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              videoId: { type: Type.STRING },
-              title: { type: Type.STRING }
-            },
-            required: ["videoId", "title"]
-          }
-        },
-        tools: [{ googleSearch: {} }]
-      }
-    });
-
-    const text = response.text;
-    console.log("Search response:", text);
-    
-    if (!text) return [];
-
-    try {
-      const parsed = JSON.parse(text);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
-      console.error("JSON parse error:", e);
-      const match = text.match(/\[.*\]/s);
-      if (match) return JSON.parse(match[0]);
-      return [];
-    }
-  } catch (error) {
-    console.error("Search failed:", error);
-    return [];
+// --- Utils ---
+function extractSpotifyUri(input: string) {
+  if (input.startsWith('spotify:')) return input;
+  if (input.includes('spotify.com')) {
+    const parts = input.split('?')[0].split('/');
+    const id = parts.pop();
+    const type = input.includes('playlist') ? 'playlist' : 'track';
+    return `spotify:${type}:${id}`;
   }
+  return null;
 }
 
-async function searchSpotify(query: string) {
-  try {
-    if (!process.env.GEMINI_API_KEY) {
-      console.error("GEMINI_API_KEY is missing");
-      return [];
-    }
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Search for the top 5 Spotify tracks or playlists for: "${query}". 
-      Return a JSON array of objects with "uri" and "title". 
-      The uri should be in the format "spotify:track:ID" or "spotify:playlist:ID".
-      Example: { "uri": "spotify:track:4cOdK2wGvWyR9p7Riaoffm", "title": "Never Gonna Give You Up - Rick Astley" }`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              uri: { type: Type.STRING },
-              title: { type: Type.STRING }
-            },
-            required: ["uri", "title"]
-          }
-        },
-        tools: [{ googleSearch: {} }]
-      }
-    });
-
-    const text = response.text;
-    console.log("Spotify search response:", text);
-    
-    if (!text) return [];
-
-    try {
-      const parsed = JSON.parse(text);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
-      console.error("JSON parse error:", e);
-      const match = text.match(/\[.*\]/s);
-      if (match) return JSON.parse(match[0]);
-      return [];
-    }
-  } catch (error) {
-    console.error("Spotify search failed:", error);
-    return [];
-  }
-}
 interface RoomState {
   videoId: string;
   currentTime: number;
@@ -258,6 +168,16 @@ interface Participant {
   uid: string;
   displayName: string;
   lastSeen: Timestamp;
+}
+
+interface QueueItem {
+  id: string;
+  mediaId: string;
+  mediaType: 'youtube' | 'spotify';
+  title: string;
+  addedBy: string;
+  addedByName: string;
+  timestamp: any;
 }
 
 // --- Components ---
@@ -296,124 +216,27 @@ const Login = () => {
   );
 };
 
-const SearchModal = ({ type, onSelect, onClose }: { type: 'youtube' | 'spotify', onSelect: (id: string) => void, onClose: () => void }) => {
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-    setLoading(true);
-    setError(null);
-    const res = type === 'youtube' ? await searchYouTube(query) : await searchSpotify(query);
-    if (res.length === 0) {
-      setError("No results found or search failed. Please try again.");
-    }
-    setResults(res);
-    setLoading(false);
-  };
-
-  const isYoutube = type === 'youtube';
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-zinc-900 w-full max-w-2xl rounded-3xl border border-zinc-800 overflow-hidden flex flex-col max-h-[80vh]"
-      >
-        <div className="p-6 border-b border-zinc-800 flex items-center justify-between">
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <Search size={20} className={isYoutube ? "text-red-500" : "text-green-500"} />
-            Search {isYoutube ? "YouTube" : "Spotify"}
-          </h2>
-          <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg transition-colors">
-            <X size={20} />
-          </button>
-        </div>
-        
-        <form onSubmit={handleSearch} className="p-6 bg-zinc-950/50">
-          <div className="relative">
-            <input
-              autoFocus
-              type="text"
-              placeholder={isYoutube ? "Search for videos..." : "Search for songs or playlists..."}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className={cn(
-                "w-full bg-zinc-900 border border-zinc-800 px-4 py-3 pl-12 rounded-xl focus:outline-none transition-colors",
-                isYoutube ? "focus:border-red-600" : "focus:border-green-600"
-              )}
-            />
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={20} />
-            <button 
-              type="submit"
-              disabled={loading}
-              className={cn(
-                "absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 rounded-lg text-sm font-bold disabled:opacity-50 transition-colors",
-                isYoutube ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700 text-black"
-              )}
-            >
-              {loading ? "..." : "Search"}
-            </button>
-          </div>
-        </form>
-
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {error && (
-            <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-500 text-sm text-center">
-              {error}
-            </div>
-          )}
-          {results.map((item) => (
-            <button
-              key={isYoutube ? item.videoId : item.uri}
-              onClick={() => onSelect(isYoutube ? item.videoId : item.uri)}
-              className="w-full flex items-center gap-4 p-3 hover:bg-zinc-800 rounded-2xl transition-colors text-left group"
-            >
-              {isYoutube ? (
-                <div className="w-32 aspect-video bg-zinc-800 rounded-xl overflow-hidden flex-shrink-0">
-                  <img 
-                    src={`https://img.youtube.com/vi/${item.videoId}/mqdefault.jpg`} 
-                    alt={item.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                    referrerPolicy="no-referrer"
-                  />
-                </div>
-              ) : (
-                <div className="w-12 h-12 bg-green-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                  <Plus size={24} className="text-black" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <h4 className="font-bold text-zinc-200 line-clamp-2">{item.title}</h4>
-                <p className="text-xs text-zinc-500 mt-1 font-mono uppercase">
-                  {isYoutube ? item.videoId : item.uri}
-                </p>
-              </div>
-            </button>
-          ))}
-          {!loading && results.length === 0 && query && (
-            <div className="text-center py-12 text-zinc-500">No results found. Try another search.</div>
-          )}
-        </div>
-      </motion.div>
-    </div>
-  );
-};
-
 const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spotify') => void }) => {
   const [roomId, setRoomId] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
   const [lobbyType, setLobbyType] = useState<'youtube' | 'spotify'>('youtube');
 
-  const handleCreateRoom = async (vid?: string) => {
-    const finalVid = vid || (lobbyType === 'youtube' ? extractVideoId(videoUrl) : videoUrl);
-    if (!finalVid && lobbyType === 'youtube') {
-      alert("Please enter a valid YouTube URL or use search");
+  const handleCreateRoom = async () => {
+    let finalVid = "";
+    let finalSpotifyUri = "";
+
+    if (lobbyType === 'youtube') {
+      finalVid = extractVideoId(videoUrl) || "";
+    } else {
+      finalSpotifyUri = extractSpotifyUri(videoUrl) || "";
+    }
+
+    if (lobbyType === 'youtube' && !finalVid) {
+      alert("Please enter a valid YouTube URL");
+      return;
+    }
+    if (lobbyType === 'spotify' && !finalSpotifyUri) {
+      alert("Please enter a valid Spotify URL or URI");
       return;
     }
 
@@ -422,8 +245,8 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
     
     try {
       await setDoc(roomRef, {
-        videoId: lobbyType === 'youtube' ? (finalVid || "") : "",
-        spotifyUri: lobbyType === 'spotify' ? (finalVid || "") : "",
+        videoId: finalVid || "",
+        spotifyUri: finalSpotifyUri || "",
         currentTime: 0,
         isPlaying: false,
         lastUpdated: serverTimestamp(),
@@ -438,30 +261,20 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-6 flex flex-col items-center justify-center">
-      {isSearching && (
-        <SearchModal 
-          type={lobbyType}
-          onSelect={(id) => {
-            setIsSearching(false);
-            handleCreateRoom(id);
-          }} 
-          onClose={() => setIsSearching(false)} 
-        />
-      )}
-      <div className="max-w-4xl w-full space-y-12">
+    <div className="min-h-screen bg-zinc-950 text-white p-4 sm:p-6 flex flex-col items-center justify-center">
+      <div className="max-w-4xl w-full space-y-8 sm:space-y-12">
         <header className="text-center space-y-4">
-          <h1 className="text-6xl font-black tracking-tighter italic">
+          <h1 className="text-4xl sm:text-6xl font-black tracking-tighter italic">
             <span className="text-white">SYNC</span>
             <span className={cn(lobbyType === 'youtube' ? "text-red-600" : "text-green-500")}>
               {lobbyType === 'youtube' ? "TUBE" : "JAM"}
             </span>
           </h1>
-          <div className="flex justify-center gap-4">
+          <div className="flex justify-center gap-2 sm:gap-4">
             <button 
               onClick={() => setLobbyType('youtube')}
               className={cn(
-                "px-6 py-2 rounded-full font-bold transition-all border-2",
+                "px-4 sm:px-6 py-2 rounded-full text-sm sm:text-base font-bold transition-all border-2",
                 lobbyType === 'youtube' ? "bg-red-600 border-red-600 text-white" : "border-zinc-800 text-zinc-500 hover:border-zinc-700"
               )}
             >
@@ -470,7 +283,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
             <button 
               onClick={() => setLobbyType('spotify')}
               className={cn(
-                "px-6 py-2 rounded-full font-bold transition-all border-2",
+                "px-4 sm:px-6 py-2 rounded-full text-sm sm:text-base font-bold transition-all border-2",
                 lobbyType === 'spotify' ? "bg-green-500 border-green-500 text-white" : "border-zinc-800 text-zinc-500 hover:border-zinc-700"
               )}
             >
@@ -479,10 +292,10 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
           </div>
         </header>
 
-        <div className="grid md:grid-cols-2 gap-8">
+        <div className="grid md:grid-cols-2 gap-6 sm:gap-8">
           {/* Create Room */}
           <div className={cn(
-            "bg-zinc-900/50 border p-8 rounded-3xl space-y-6 transition-colors",
+            "bg-zinc-900/50 border p-6 sm:p-8 rounded-3xl space-y-6 transition-colors",
             lobbyType === 'youtube' ? "border-red-900/30" : "border-green-900/30"
           )}>
             <div className="flex items-center gap-3">
@@ -490,51 +303,47 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
               <h2 className="text-xl font-bold">Create {lobbyType === 'youtube' ? "Room" : "Jam"}</h2>
             </div>
             <div className="space-y-4">
-              <input
-                type="text"
-                placeholder={lobbyType === 'youtube' ? "YouTube URL" : "Spotify Track/Playlist URL"}
-                value={videoUrl}
-                onChange={(e) => setVideoUrl(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => setIsSearching(true)}
-                  className="py-3 bg-zinc-800 hover:bg-zinc-700 font-bold rounded-xl transition-all flex items-center justify-center gap-2"
-                >
-                  <Search size={18} />
-                  Search
-                </button>
-                <button
-                  onClick={() => handleCreateRoom()}
-                  className={cn(
-                    "py-3 font-bold rounded-xl transition-all",
-                    lobbyType === 'youtube' ? "bg-red-600 hover:bg-red-700" : "bg-green-500 hover:bg-green-600",
-                    lobbyType === 'youtube' ? "" : "text-black"
-                  )}
-                >
-                  {lobbyType === 'youtube' ? "Start" : "Start Jam"}
-                </button>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Paste Link</label>
+                <input
+                  type="text"
+                  placeholder={lobbyType === 'youtube' ? "YouTube Video URL" : "Spotify Track/Playlist URL"}
+                  value={videoUrl}
+                  onChange={(e) => setVideoUrl(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
+                />
               </div>
+              <button
+                onClick={handleCreateRoom}
+                className={cn(
+                  "w-full py-3 font-bold rounded-xl transition-all active:scale-[0.98]",
+                  lobbyType === 'youtube' ? "bg-red-600 hover:bg-red-700" : "bg-green-500 hover:bg-green-600 text-black"
+                )}
+              >
+                {lobbyType === 'youtube' ? "Start Party" : "Start Jam"}
+              </button>
             </div>
           </div>
 
           {/* Join Room */}
-          <div className="bg-zinc-900/50 border border-zinc-800 p-8 rounded-3xl space-y-6">
+          <div className="bg-zinc-900/50 border border-zinc-800 p-6 sm:p-8 rounded-3xl space-y-6">
             <div className="flex items-center gap-3 text-zinc-400">
               <ArrowRight size={24} />
               <h2 className="text-xl font-bold">Join Existing</h2>
             </div>
             <div className="space-y-4">
-              <input
-                type="text"
-                placeholder="Enter ID"
-                value={roomId}
-                onChange={(e) => setRoomId(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
-              />
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Room ID</label>
+                <input
+                  type="text"
+                  placeholder="Enter ID"
+                  value={roomId}
+                  onChange={(e) => setRoomId(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
+                />
+              </div>
               <button
-                onClick={() => roomId && onJoinRoom(roomId, 'youtube')} // Type doesn't matter for join
+                onClick={() => roomId && onJoinRoom(roomId, 'youtube')}
                 className="w-full py-3 bg-zinc-100 text-black hover:bg-white font-bold rounded-xl transition-all active:scale-[0.98]"
               >
                 Join Party
@@ -554,9 +363,10 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [participants, setParticipants] = useState<Participant[]>([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [chatInput, setChatInput] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [activeTab, setActiveTab] = useState<'chat' | 'activity'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'activity' | 'queue'>('chat');
+  const [showSidebar, setShowSidebar] = useState(false);
   
   const isUpdatingRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -577,23 +387,23 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     updatePresence();
     const interval = setInterval(updatePresence, 30000); // Update every 30s
 
-    const addActivity = async (type: Activity['type'], details?: string) => {
+    const addActivityLocal = async (type: Activity['type'], details?: string) => {
       const activitiesRef = collection(db, 'rooms', roomId, 'activities');
       await addDoc(activitiesRef, {
         type,
         userId: auth.currentUser?.uid,
-        userName: auth.currentUser?.displayName,
+        userName: auth.currentUser?.displayName || 'Anonymous',
         timestamp: serverTimestamp(),
-        details
+        details: details || ''
       });
     };
 
-    addActivity('join');
+    addActivityLocal('join');
 
     return () => {
       clearInterval(interval);
       deleteDoc(participantRef);
-      addActivity('leave');
+      addActivityLocal('leave');
     };
   }, [roomId]);
 
@@ -603,6 +413,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     const messagesRef = collection(db, 'rooms', roomId, 'messages');
     const activitiesRef = collection(db, 'rooms', roomId, 'activities');
     const participantsRef = collection(db, 'rooms', roomId, 'participants');
+    const queueRef = collection(db, 'rooms', roomId, 'queue');
 
     const unsubRoom = onSnapshot(roomRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -632,11 +443,16 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       setParticipants(snapshot.docs.map(d => d.data() as Participant));
     });
 
+    const unsubQueue = onSnapshot(query(queueRef, orderBy('timestamp', 'asc')), (snapshot) => {
+      setQueue(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as QueueItem)));
+    });
+
     return () => {
       unsubRoom();
       unsubMessages();
       unsubActivities();
       unsubParticipants();
+      unsubQueue();
     };
   }, [roomId, player, onLeave]);
 
@@ -681,10 +497,65 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     await addDoc(messagesRef, {
       text: chatInput,
       senderId: auth.currentUser?.uid,
-      senderName: auth.currentUser?.displayName,
+      senderName: auth.currentUser?.displayName || 'Anonymous',
       timestamp: serverTimestamp()
     });
     setChatInput('');
+  };
+
+  const addToQueue = async (val: string) => {
+    if (!val.trim()) return;
+    let mediaType: 'youtube' | 'spotify' = 'youtube';
+    let mediaId = extractVideoId(val);
+    let title = '';
+
+    if (mediaId) {
+      mediaType = 'youtube';
+      title = `YouTube: ${mediaId}`;
+    } else {
+      mediaId = extractSpotifyUri(val);
+      if (mediaId) {
+        mediaType = 'spotify';
+        title = `Spotify: ${mediaId.split(':')[2] || mediaId}`;
+      }
+    }
+
+    if (!mediaId) return;
+
+    const queueRef = collection(db, 'rooms', roomId, 'queue');
+    await addDoc(queueRef, {
+      mediaId,
+      mediaType,
+      title,
+      addedBy: auth.currentUser?.uid,
+      addedByName: auth.currentUser?.displayName || 'Anonymous',
+      timestamp: serverTimestamp()
+    });
+    addActivity('change_video', `queued ${title}`);
+  };
+
+  const removeFromQueue = async (itemId: string) => {
+    const itemRef = doc(db, 'rooms', roomId, 'queue', itemId);
+    await deleteDoc(itemRef);
+  };
+
+  const playNext = async () => {
+    if (queue.length === 0) return;
+    const nextItem = queue[0];
+    const updates: Partial<RoomState> = {
+      mediaType: nextItem.mediaType,
+      currentTime: 0,
+      isPlaying: true
+    };
+    if (nextItem.mediaType === 'youtube') {
+      updates.videoId = nextItem.mediaId;
+    } else {
+      updates.spotifyUri = nextItem.mediaId;
+    }
+    
+    await updateRoomState(updates);
+    await removeFromQueue(nextItem.id);
+    addActivity('change_video', `playing next: ${nextItem.title}`);
   };
 
   const onPlayerReady: YouTubeProps['onReady'] = (event) => {
@@ -713,6 +584,10 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     }
   };
 
+  const onPlayerEnd = () => {
+    playNext();
+  };
+
   const handleCopyLink = () => {
     navigator.clipboard.writeText(roomId);
     setCopied(true);
@@ -723,72 +598,53 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white flex flex-col h-screen overflow-hidden">
-      {isSearching && (
-        <SearchModal 
-          type={room.mediaType}
-          onSelect={(id) => {
-            setIsSearching(false);
-            if (room.mediaType === 'youtube') {
-              updateRoomState({ videoId: id, currentTime: 0, isPlaying: false });
-            } else {
-              updateRoomState({ spotifyUri: id });
-            }
-            addActivity('change_video', id);
-          }} 
-          onClose={() => setIsSearching(false)} 
-        />
-      )}
-
       {/* Header */}
-      <header className="p-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-950/80 backdrop-blur-md z-10 shrink-0">
-        <div className="flex items-center gap-4">
+      <header className="p-3 sm:p-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-950/80 backdrop-blur-md z-20 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-4">
           <button onClick={onLeave} className="p-2 hover:bg-zinc-900 rounded-lg transition-colors">
             <LogOut size={20} className="rotate-180" />
           </button>
-          <div className="hidden sm:block">
-            <h2 className="font-bold text-lg leading-tight">{room.name || "Watch Party"}</h2>
-            <p className="text-xs text-zinc-500 font-mono uppercase tracking-wider">{roomId}</p>
+          <div>
+            <h2 className="font-bold text-sm sm:text-lg leading-tight truncate max-w-[120px] sm:max-w-none">{room.name || "Watch Party"}</h2>
+            <p className="text-[10px] sm:text-xs text-zinc-500 font-mono uppercase tracking-wider">{roomId}</p>
           </div>
         </div>
         
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={() => setIsSearching(true)}
-            className="p-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl transition-all text-zinc-400 hover:text-white"
-          >
-            <Search size={20} />
-          </button>
+        <div className="flex items-center gap-2 sm:gap-3">
           <button 
             onClick={handleCopyLink}
-            className="flex items-center gap-2 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-sm font-medium transition-all"
+            className="flex items-center gap-2 px-3 py-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-xs sm:text-sm font-medium transition-all"
           >
-            {copied ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
+            {copied ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
             <span className="hidden sm:inline">{copied ? "Copied!" : "Copy ID"}</span>
           </button>
-          <div className="flex -space-x-2">
-            {participants.slice(0, 3).map((p, i) => (
-              <div key={p.uid} className="w-10 h-10 rounded-full bg-zinc-800 border-2 border-zinc-950 flex items-center justify-center text-xs font-bold" title={p.displayName}>
+          
+          <button 
+            onClick={() => setShowSidebar(!showSidebar)}
+            className="lg:hidden p-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-zinc-400"
+          >
+            <MessageSquare size={20} />
+          </button>
+
+          <div className="hidden sm:flex -space-x-2">
+            {participants.slice(0, 3).map((p) => (
+              <div key={p.uid} className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-zinc-800 border-2 border-zinc-950 flex items-center justify-center text-[10px] sm:text-xs font-bold" title={p.displayName}>
                 {p.displayName[0]}
               </div>
             ))}
-            {participants.length > 3 && (
-              <div className="w-10 h-10 rounded-full bg-zinc-900 border-2 border-zinc-950 flex items-center justify-center text-xs font-bold text-zinc-500">
-                +{participants.length - 3}
-              </div>
-            )}
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+      <main className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
         {/* Player Section */}
         <div className="flex-1 flex flex-col p-4 sm:p-6 overflow-y-auto min-h-0">
           <div className="flex gap-2 mb-4">
             <button 
               onClick={() => updateRoomState({ mediaType: 'youtube' })}
               className={cn(
-                "px-4 py-2 rounded-xl text-xs font-bold transition-all",
+                "px-4 py-2 rounded-xl text-[10px] sm:text-xs font-bold transition-all",
                 room.mediaType === 'youtube' ? "bg-red-600 text-white" : "bg-zinc-900 text-zinc-500"
               )}
             >
@@ -797,7 +653,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             <button 
               onClick={() => updateRoomState({ mediaType: 'spotify' })}
               className={cn(
-                "px-4 py-2 rounded-xl text-xs font-bold transition-all",
+                "px-4 py-2 rounded-xl text-[10px] sm:text-xs font-bold transition-all",
                 room.mediaType === 'spotify' ? "bg-green-600 text-white" : "bg-zinc-900 text-zinc-500"
               )}
             >
@@ -805,7 +661,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             </button>
           </div>
 
-          <div className="aspect-video bg-black rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0">
+          <div className="aspect-video bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0">
             {room.mediaType === 'youtube' ? (
               <YouTube
                 videoId={room.videoId}
@@ -816,38 +672,24 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                 }}
                 onReady={onPlayerReady}
                 onStateChange={onPlayerStateChange}
+                onEnd={onPlayerEnd}
                 className="w-full h-full"
               />
             ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center p-8 bg-zinc-900/50">
+              <div className="w-full h-full flex flex-col items-center justify-center p-4 sm:p-8 bg-zinc-900/50">
                 <div className="w-full max-w-md space-y-4">
-                  <div className="flex items-center gap-3 text-green-500 mb-6">
-                    <div className="p-3 bg-green-500/10 rounded-2xl">
-                      <Plus size={24} />
+                  <div className="flex items-center gap-3 text-green-500 mb-2 sm:mb-6">
+                    <div className="p-2 sm:p-3 bg-green-500/10 rounded-2xl">
+                      <Plus size={20} sm:size={24} />
                     </div>
-                    <h3 className="text-xl font-bold">Spotify Jam</h3>
+                    <h3 className="text-lg sm:text-xl font-bold">Spotify Jam</h3>
                   </div>
-                  <input 
-                    type="text"
-                    placeholder="Paste Spotify Track/Playlist URL"
-                    className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-green-600 transition-colors"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const val = (e.target as HTMLInputElement).value;
-                        if (val.includes('spotify.com')) {
-                          const uri = val.split('?')[0].split('/').pop();
-                          const type = val.includes('playlist') ? 'playlist' : 'track';
-                          updateRoomState({ spotifyUri: `spotify:${type}:${uri}` });
-                          addActivity('change_video', `Spotify: ${type}`);
-                        }
-                      }
-                    }}
-                  />
+                  
                   {room.spotifyUri && (
                     <iframe 
                       src={`https://open.spotify.com/embed/${room.spotifyUri.split(':')[1]}/${room.spotifyUri.split(':')[2]}`}
                       width="100%" 
-                      height="380" 
+                      height="352" 
                       frameBorder="0" 
                       allow="encrypted-media"
                       className="rounded-2xl shadow-2xl"
@@ -858,160 +700,220 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             )}
           </div>
           
-          <div className="mt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-zinc-900/30 p-6 rounded-3xl border border-zinc-800/50">
-            <div className="flex items-center gap-4">
+          <div className="mt-6 space-y-4">
+            <div className="bg-zinc-900/30 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50">
+              <h3 className="text-sm font-bold text-zinc-500 uppercase tracking-widest mb-4">Change Media</h3>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <input 
+                  type="text"
+                  placeholder={room.mediaType === 'youtube' ? "Paste YouTube Link" : "Paste Spotify Link"}
+                  className="flex-1 bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const val = (e.target as HTMLInputElement).value;
+                      const vid = extractVideoId(val);
+                      const uri = extractSpotifyUri(val);
+                      
+                      if (vid) {
+                        updateRoomState({ mediaType: 'youtube', videoId: vid, currentTime: 0, isPlaying: true });
+                        addActivity('change_video', vid);
+                        (e.target as HTMLInputElement).value = '';
+                      } else if (uri) {
+                        updateRoomState({ mediaType: 'spotify', spotifyUri: uri, currentTime: 0, isPlaying: true });
+                        addActivity('change_video', `Spotify: ${uri.split(':')[1]}`);
+                        (e.target as HTMLInputElement).value = '';
+                      }
+                    }
+                  }}
+                />
+                <div className="flex gap-2">
+                  <button 
+                    onClick={(e) => {
+                      const input = (e.currentTarget.parentElement?.previousSibling as HTMLInputElement);
+                      const val = input.value;
+                      const vid = extractVideoId(val);
+                      const uri = extractSpotifyUri(val);
+                      
+                      if (vid) {
+                        updateRoomState({ mediaType: 'youtube', videoId: vid, currentTime: 0, isPlaying: true });
+                        addActivity('change_video', vid);
+                        input.value = '';
+                      } else if (uri) {
+                        updateRoomState({ mediaType: 'spotify', spotifyUri: uri, currentTime: 0, isPlaying: true });
+                        addActivity('change_video', `Spotify: ${uri.split(':')[1]}`);
+                        input.value = '';
+                      }
+                    }}
+                    className={cn(
+                      "flex-1 sm:flex-none px-6 py-3 rounded-xl font-bold text-sm transition-all active:scale-95",
+                      room.mediaType === 'youtube' ? "bg-red-600" : "bg-green-600 text-black"
+                    )}
+                  >
+                    Play Now
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      const input = (e.currentTarget.parentElement?.previousSibling as HTMLInputElement);
+                      addToQueue(input.value);
+                      input.value = '';
+                    }}
+                    className="flex-1 sm:flex-none px-6 py-3 rounded-xl font-bold text-sm bg-zinc-800 hover:bg-zinc-700 transition-all active:scale-95"
+                  >
+                    Add Queue
+                  </button>
+                </div>
+              </div>
+              <p className="text-[10px] text-zinc-600 mt-2 italic">Play Now replaces current media. Add Queue puts it in the line.</p>
+            </div>
+
+            <div className="flex items-center gap-4 bg-zinc-900/30 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50">
               <div className={cn(
-                "w-3 h-3 rounded-full animate-pulse shadow-[0_0_10px_rgba(0,0,0,0.5)]",
-                room.isPlaying ? "bg-green-500 shadow-green-500/50" : "bg-zinc-500"
+                "w-3 h-3 rounded-full animate-pulse",
+                room.isPlaying ? "bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]" : "bg-zinc-500"
               )} />
               <div>
-                <span className="font-bold text-lg block">
-                  {room.isPlaying ? "Live Now" : "Paused"}
+                <span className="font-bold text-sm sm:text-lg block">
+                  {room.isPlaying ? "Live Syncing" : "Paused"}
                 </span>
-                <span className="text-sm text-zinc-500">
-                  {participants.length} watching together
+                <span className="text-[10px] sm:text-xs text-zinc-500">
+                  {participants.length} user{participants.length !== 1 ? 's' : ''} connected
                 </span>
-              </div>
-            </div>
-            <div className="flex items-center gap-6">
-              <div className="text-right hidden sm:block">
-                <p className="text-xs text-zinc-500 uppercase font-mono tracking-widest">Last Sync</p>
-                <p className="text-sm font-medium">{format(room.lastUpdated?.toDate() || new Date(), 'HH:mm:ss')}</p>
-              </div>
-              <div className="flex items-center gap-2 text-red-500 bg-red-500/10 px-4 py-2 rounded-xl border border-red-500/20">
-                <Users size={18} />
-                <span className="font-bold">{participants.length}</span>
               </div>
             </div>
           </div>
         </div>
 
         {/* Sidebar (Chat & Activity) */}
-        <div className="w-full lg:w-[400px] border-l border-zinc-900 flex flex-col bg-zinc-950 shrink-0 h-full lg:h-auto">
-          <div className="flex border-b border-zinc-900">
+        <aside className={cn(
+          "fixed inset-y-0 right-0 w-full sm:w-80 bg-zinc-950 border-l border-zinc-900 z-30 lg:relative lg:translate-x-0 transition-transform duration-300 flex flex-col",
+          showSidebar ? "translate-x-0" : "translate-x-full"
+        )}>
+          <div className="p-4 border-b border-zinc-900 flex items-center justify-between lg:hidden">
+            <h3 className="font-bold">Room Activity</h3>
+            <button onClick={() => setShowSidebar(false)} className="p-2 hover:bg-zinc-900 rounded-lg">
+              <X size={20} />
+            </button>
+          </div>
+
+          <div className="flex p-2 gap-1 bg-zinc-900/50 m-4 rounded-xl shrink-0">
             <button 
               onClick={() => setActiveTab('chat')}
               className={cn(
-                "flex-1 py-4 font-bold text-sm transition-all border-b-2",
-                activeTab === 'chat' ? "text-white border-red-600 bg-red-600/5" : "text-zinc-500 border-transparent hover:text-zinc-300"
+                "flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all",
+                activeTab === 'chat' ? "bg-zinc-800 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
               )}
             >
-              <div className="flex items-center justify-center gap-2">
-                <MessageSquare size={18} />
-                CHAT
-              </div>
+              <MessageSquare size={14} />
+              CHAT
+            </button>
+            <button 
+              onClick={() => setActiveTab('queue')}
+              className={cn(
+                "flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all",
+                activeTab === 'queue' ? "bg-zinc-800 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
+              )}
+            >
+              <List size={14} />
+              QUEUE
             </button>
             <button 
               onClick={() => setActiveTab('activity')}
               className={cn(
-                "flex-1 py-4 font-bold text-sm transition-all border-b-2",
-                activeTab === 'activity' ? "text-white border-red-600 bg-red-600/5" : "text-zinc-500 border-transparent hover:text-zinc-300"
+                "flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all",
+                activeTab === 'activity' ? "bg-zinc-800 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
               )}
             >
-              <div className="flex items-center justify-center gap-2">
-                <ActivityIcon size={18} />
-                ACTIVITY
-              </div>
+              <ActivityIcon size={14} />
+              LOGS
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
+          <div className="flex-1 overflow-y-auto px-4 space-y-4 custom-scrollbar">
             {activeTab === 'chat' ? (
-              <div className="space-y-4">
-                {messages.map((msg) => (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    key={msg.id} 
-                    className={cn(
-                      "flex flex-col gap-1",
-                      msg.senderId === auth.currentUser?.uid ? "items-end" : "items-start"
-                    )}
+              messages.map((msg) => (
+                <div key={msg.id} className={cn(
+                  "flex flex-col max-w-[85%]",
+                  msg.senderId === auth.currentUser?.uid ? "ml-auto items-end" : "items-start"
+                )}>
+                  <span className="text-[10px] text-zinc-500 mb-1 px-1">{msg.senderName}</span>
+                  <div className={cn(
+                    "px-4 py-2 rounded-2xl text-sm",
+                    msg.senderId === auth.currentUser?.uid ? "bg-zinc-100 text-black rounded-tr-none" : "bg-zinc-900 text-zinc-200 rounded-tl-none"
+                  )}>
+                    {msg.text}
+                  </div>
+                </div>
+              ))
+            ) : activeTab === 'queue' ? (
+              <div className="space-y-3">
+                {queue.length === 0 ? (
+                  <div className="text-center py-8 text-zinc-600">
+                    <List size={32} className="mx-auto mb-2 opacity-20" />
+                    <p className="text-xs">Queue is empty</p>
+                  </div>
+                ) : (
+                  queue.map((item, idx) => (
+                    <div key={item.id} className="bg-zinc-900/50 p-3 rounded-xl border border-zinc-800/50 group">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="text-[10px] font-mono text-zinc-600">{idx + 1}</span>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold truncate">{item.title}</p>
+                            <p className="text-[10px] text-zinc-500">Added by {item.addedByName}</p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => removeFromQueue(item.id)}
+                          className="p-1.5 text-zinc-600 hover:text-red-500 transition-colors"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+                {queue.length > 0 && (
+                  <button 
+                    onClick={playNext}
+                    className="w-full py-2 bg-zinc-100 text-black rounded-lg text-xs font-bold hover:bg-white transition-colors"
                   >
-                    <div className="flex items-center gap-2 px-1">
-                      <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-tighter">
-                        {msg.senderName}
-                      </span>
-                      <span className="text-[10px] text-zinc-600">
-                        {msg.timestamp ? format(msg.timestamp.toDate(), 'HH:mm') : ''}
-                      </span>
-                    </div>
-                    <div className={cn(
-                      "px-4 py-2 rounded-2xl max-w-[85%] text-sm",
-                      msg.senderId === auth.currentUser?.uid 
-                        ? "bg-red-600 text-white rounded-tr-none" 
-                        : "bg-zinc-900 text-zinc-200 rounded-tl-none"
-                    )}>
-                      {msg.text}
-                    </div>
-                  </motion.div>
-                ))}
-                <div ref={chatEndRef} />
+                    Play Next
+                  </button>
+                )}
               </div>
             ) : (
-              <div className="space-y-4">
-                {activities.map((act) => (
-                  <motion.div 
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    key={act.id} 
-                    className="flex items-start gap-3 p-3 bg-zinc-900/30 rounded-2xl border border-zinc-900"
-                  >
-                    <div className={cn(
-                      "p-2 rounded-lg shrink-0",
-                      act.type === 'join' ? "bg-green-500/10 text-green-500" :
-                      act.type === 'leave' ? "bg-red-500/10 text-red-500" :
-                      act.type === 'pause' ? "bg-yellow-500/10 text-yellow-500" :
-                      act.type === 'play' ? "bg-blue-500/10 text-blue-500" :
-                      "bg-zinc-500/10 text-zinc-500"
-                    )}>
-                      {act.type === 'join' ? <Users size={14} /> :
-                       act.type === 'leave' ? <LogOut size={14} /> :
-                       act.type === 'pause' ? <Pause size={14} /> :
-                       act.type === 'play' ? <Play size={14} /> :
-                       <ActivityIcon size={14} />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-zinc-300">
-                        <span className="font-bold text-white">{act.userName}</span>
-                        {' '}
-                        {act.type === 'join' ? 'joined the party' :
-                         act.type === 'leave' ? 'left the party' :
-                         act.type === 'pause' ? 'paused the video' :
-                         act.type === 'play' ? 'started the video' :
-                         act.type === 'seek' ? 'skipped ahead' :
-                         'changed the video'}
-                      </p>
-                      <p className="text-[10px] text-zinc-600 mt-1">
-                        {act.timestamp ? format(act.timestamp.toDate(), 'HH:mm:ss') : ''}
-                      </p>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
+              activities.map((act) => (
+                <div key={act.id} className="flex gap-3 items-start group">
+                  <div className="w-1 h-8 bg-zinc-800 group-hover:bg-zinc-600 rounded-full transition-colors shrink-0" />
+                  <div>
+                    <p className="text-xs text-zinc-300">
+                      <span className="font-bold text-white">{act.userName}</span> {act.type}d {act.details}
+                    </p>
+                    <span className="text-[10px] text-zinc-600">{act.timestamp ? format(act.timestamp.toDate(), 'HH:mm') : '...'}</span>
+                  </div>
+                </div>
+              ))
             )}
+            <div ref={chatEndRef} />
           </div>
 
           {activeTab === 'chat' && (
-            <form onSubmit={sendMessage} className="p-4 border-t border-zinc-900 bg-zinc-950 shrink-0">
+            <form onSubmit={sendMessage} className="p-4 border-t border-zinc-900 bg-zinc-950">
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="Type a message..."
+                  placeholder="Message..."
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 px-4 py-3 pr-12 rounded-2xl focus:outline-none focus:border-red-600 transition-colors text-sm"
+                  className="w-full bg-zinc-900 border border-zinc-800 px-4 py-3 pr-12 rounded-2xl focus:outline-none focus:border-zinc-700 transition-colors text-sm"
                 />
-                <button 
-                  type="submit"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-red-600 hover:bg-red-600/10 rounded-xl transition-all"
-                >
+                <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-zinc-400 hover:text-white transition-colors">
                   <Send size={18} />
                 </button>
               </div>
             </form>
           )}
-        </div>
+        </aside>
       </main>
     </div>
   );

@@ -9,6 +9,15 @@
           "type": "string",
           "description": "The YouTube video ID"
         },
+        "spotifyUri": {
+          "type": "string",
+          "description": "The Spotify track or playlist URI"
+        },
+        "mediaType": {
+          "type": "string",
+          "enum": ["youtube", "spotify"],
+          "description": "The type of media being played"
+        },
         "currentTime": {
           "type": "number",
           "description": "Current playback time in seconds"
@@ -31,7 +40,7 @@
           "description": "Room name"
         }
       },
-      "required": ["videoId", "currentTime", "isPlaying", "lastUpdated", "updatedBy"]
+      "required": ["mediaType", "currentTime", "isPlaying", "lastUpdated", "updatedBy"]
     },
     "User": {
       "title": "User",
@@ -49,6 +58,11 @@
         "photoURL": {
           "type": "string",
           "description": "User photo URL"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "user"],
+          "description": "User role"
         }
       },
       "required": ["uid", "displayName"]
@@ -88,6 +102,20 @@
         "lastSeen": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "displayName", "lastSeen"]
+    },
+    "QueueItem": {
+      "title": "QueueItem",
+      "description": "An item in the media queue",
+      "type": "object",
+      "properties": {
+        "mediaId": { "type": "string", "description": "YouTube video ID or Spotify URI" },
+        "mediaType": { "type": "string", "enum": ["youtube", "spotify"] },
+        "title": { "type": "string", "description": "Title of the media" },
+        "addedBy": { "type": "string", "description": "UID of the user who added it" },
+        "addedByName": { "type": "string", "description": "Name of the user who added it" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["mediaId", "mediaType", "addedBy", "addedByName", "timestamp"]
     }
   },
   "firestore": {
@@ -106,6 +134,10 @@
     "/rooms/{roomId}/participants/{participantId}": {
       "schema": "Participant",
       "description": "Current participants"
+    },
+    "/rooms/{roomId}/queue/{queueItemId}": {
+      "schema": "QueueItem",
+      "description": "Media queue"
     },
     "/users/{userId}": {
       "schema": "User",

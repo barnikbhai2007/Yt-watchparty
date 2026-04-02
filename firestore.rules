@@ -12,7 +12,9 @@
 // Collection: rooms
 // Document ID: {roomId}
 // Fields:
-//   - videoId: string (required) - YouTube video ID
+//   - videoId: string (required) - YouTube video ID (can be empty)
+//   - spotifyUri: string (required) - Spotify URI (can be empty)
+//   - mediaType: string (required) - youtube or spotify
 //   - currentTime: number (required) - Current playback time
 //   - isPlaying: bool (required) - Playback state
 //   - lastUpdated: timestamp (required) - Last update time
@@ -40,6 +42,15 @@
 //   - displayName: string (required) - User display name
 //   - lastSeen: timestamp (required) - Last activity time
 //
+// Subcollection: rooms/{roomId}/queue
+// Fields:
+//   - mediaId: string (required) - YouTube video ID or Spotify URI
+//   - mediaType: string (required) - youtube or spotify
+//   - title: string (required) - Title of the media
+//   - addedBy: string (required) - UID of the user who added it
+//   - addedByName: string (required) - Name of the user who added it
+//   - timestamp: timestamp (required) - When it was added
+//
 // ===============================================================
 
 rules_version = '2';
@@ -58,15 +69,24 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "webblogger82@gmail.com" && request.auth.token.email_verified == true));
+    }
+
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'displayName']) &&
              data.uid is string &&
-             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100;
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100 &&
+             (!('role' in data) || data.role in ['admin', 'user']);
     }
 
     function isValidRoom(data) {
-      return data.keys().hasAll(['videoId', 'currentTime', 'isPlaying', 'lastUpdated', 'updatedBy']) &&
-             data.videoId is string && data.videoId.size() > 0 &&
+      return data.keys().hasAll(['mediaType', 'currentTime', 'isPlaying', 'lastUpdated', 'updatedBy', 'videoId', 'spotifyUri']) &&
+             data.mediaType in ['youtube', 'spotify'] &&
+             data.videoId is string &&
+             data.spotifyUri is string &&
              data.currentTime is number &&
              data.isPlaying is bool &&
              data.lastUpdated is timestamp &&
@@ -94,6 +114,16 @@ service cloud.firestore {
              data.uid == request.auth.uid &&
              data.displayName is string &&
              data.lastSeen is timestamp;
+    }
+
+    function isValidQueueItem(data) {
+      return data.keys().hasAll(['mediaId', 'mediaType', 'title', 'addedBy', 'addedByName', 'timestamp']) &&
+             data.mediaId is string &&
+             data.mediaType in ['youtube', 'spotify'] &&
+             data.title is string &&
+             data.addedBy == request.auth.uid &&
+             data.addedByName is string &&
+             data.timestamp is timestamp;
     }
 
     // ===============================================================
@@ -125,6 +155,12 @@ service cloud.firestore {
         allow read: if isAuthenticated();
         allow create, update: if isAuthenticated() && isValidParticipant(request.resource.data);
         allow delete: if isAuthenticated() && participantId == request.auth.uid;
+      }
+
+      match /queue/{queueItemId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidQueueItem(request.resource.data);
+        allow delete: if isAuthenticated();
       }
     }
   }
