@@ -21,8 +21,8 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
+  signInAnonymously, 
+  updateProfile, 
   onAuthStateChanged, 
   User 
 } from 'firebase/auth';
@@ -187,19 +187,47 @@ interface QueueItem {
 
 // --- Components ---
 
+const AVATARS = [
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Aneka",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Mimi",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Jack",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Oliver",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Sophie",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Leo",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Chloe",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Max",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Lily"
+];
+
 const Login = () => {
-  const handleLogin = async () => {
-    const provider = new GoogleAuthProvider();
+  const [name, setName] = useState('');
+  const [selectedAvatar, setSelectedAvatar] = useState(AVATARS[0]);
+  const [isJoining, setIsJoining] = useState(false);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setIsJoining(true);
     try {
-      await signInWithPopup(auth, provider);
+      const { user } = await signInAnonymously(auth);
+      await updateProfile(user, {
+        displayName: name,
+        photoURL: selectedAvatar
+      });
+      // Force a reload or state update if needed, but onAuthStateChanged might catch it.
+      // Actually, onAuthStateChanged fires before updateProfile finishes sometimes, 
+      // so we might need to handle that, but typically it's fine.
+      window.location.reload(); // Simple way to ensure profile is loaded
     } catch (error) {
       console.error("Login failed:", error);
+      setIsJoining(false);
     }
   };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-white p-4">
-      <div className="max-w-md w-full space-y-8 text-center">
+      <div className="max-w-md w-full space-y-8 text-center bg-zinc-900/50 p-8 rounded-3xl border border-zinc-800">
         <div className="flex justify-center">
           <div className="p-4 bg-red-600 rounded-2xl shadow-2xl shadow-red-900/20">
             <YoutubeIcon size={48} />
@@ -209,13 +237,48 @@ const Login = () => {
           <h1 className="text-4xl font-bold tracking-tight">SyncTube</h1>
           <p className="mt-2 text-zinc-400">Watch YouTube with friends, perfectly in sync.</p>
         </div>
-        <button
-          onClick={handleLogin}
-          className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-white text-black font-semibold rounded-xl hover:bg-zinc-200 transition-all active:scale-[0.98]"
-        >
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
-          Sign in with Google
-        </button>
+        
+        <form onSubmit={handleLogin} className="space-y-6 text-left">
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Your Name</label>
+            <input
+              type="text"
+              required
+              maxLength={20}
+              placeholder="Enter your name..."
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Choose Avatar</label>
+            <div className="grid grid-cols-5 gap-2">
+              {AVATARS.map((avatar, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setSelectedAvatar(avatar)}
+                  className={cn(
+                    "p-1 rounded-xl transition-all",
+                    selectedAvatar === avatar ? "bg-blue-500 scale-110" : "bg-zinc-800 hover:bg-zinc-700 hover:scale-105"
+                  )}
+                >
+                  <img src={avatar} alt={`Avatar ${idx + 1}`} className="w-full h-auto rounded-lg" />
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={isJoining || !name.trim()}
+            className="w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isJoining ? "Joining..." : "Enter SyncTube"}
+          </button>
+        </form>
       </div>
     </div>
   );
@@ -361,6 +424,55 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
   );
 };
 
+const EMOJIS = ['😂', '❤️', '🔥', '😮', '😢', '👏', '🎉', '✨'];
+
+const FloatingEmojis = ({ roomId }: { roomId: string }) => {
+  const [emojis, setEmojis] = useState<{id: string, emoji: string, x: number}[]>([]);
+
+  useEffect(() => {
+    const q = query(collection(db, 'rooms', roomId, 'reactions'), orderBy('timestamp', 'desc'), limit(5));
+    const unsub = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const data = change.doc.data();
+          // Only show if it's recent (within last 5 seconds)
+          if (data.timestamp && Date.now() - data.timestamp.toMillis() < 5000) {
+            const newEmoji = {
+              id: change.doc.id + Math.random(), // Ensure unique ID even if same doc triggers
+              emoji: data.emoji,
+              x: Math.random() * 80 + 10 // 10% to 90%
+            };
+            setEmojis(prev => [...prev, newEmoji]);
+            setTimeout(() => {
+              setEmojis(prev => prev.filter(e => e.id !== newEmoji.id));
+            }, 3000);
+          }
+        }
+      });
+    });
+    return unsub;
+  }, [roomId]);
+
+  return (
+    <div className="absolute inset-0 pointer-events-none overflow-hidden z-50">
+      <AnimatePresence>
+        {emojis.map(e => (
+          <motion.div
+            key={e.id}
+            initial={{ y: '100%', opacity: 1, x: `${e.x}%`, scale: 0.5 }}
+            animate={{ y: '-20%', opacity: 0, scale: 2.5 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 2.5, ease: 'easeOut' }}
+            className="absolute bottom-0 text-4xl sm:text-6xl"
+          >
+            {e.emoji}
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [player, setPlayer] = useState<any>(null);
@@ -377,8 +489,54 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [searchInput, setSearchInput] = useState('');
   
+  const [duration, setDuration] = useState(0);
+  const [localProgress, setLocalProgress] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  
   const isUpdatingRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let interval: any;
+    if (room?.isPlaying && player && !isDragging) {
+      interval = setInterval(() => {
+        try {
+          const current = player.getCurrentTime();
+          const dur = player.getDuration();
+          if (current !== undefined) setLocalProgress(current);
+          if (dur !== undefined && dur > 0) setDuration(dur);
+        } catch (e) {}
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [room?.isPlaying, player, isDragging]);
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setLocalProgress(parseFloat(e.target.value));
+  };
+
+  const handleSeekCommit = async () => {
+    if (player) {
+      player.seekTo(localProgress, true);
+      await updateRoomState({ currentTime: localProgress });
+      addActivity('seek', `to ${Math.floor(localProgress)}s`);
+    }
+  };
+
+  const sendEmoji = async (emoji: string) => {
+    if (!auth.currentUser) return;
+    const reactionsRef = collection(db, 'rooms', roomId, 'reactions');
+    try {
+      await addDoc(reactionsRef, {
+        emoji,
+        userId: auth.currentUser.uid,
+        timestamp: serverTimestamp()
+      });
+    } catch (error) {
+      console.error("Failed to send emoji:", error);
+    }
+  };
+
 
   // --- Presence & Activity ---
   useEffect(() => {
@@ -774,6 +932,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           </div>
 
           <div className="aspect-video bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0 relative">
+            <FloatingEmojis roomId={roomId} />
             {room.mediaType === 'youtube' ? (
               <YouTube
                 videoId={room.videoId}
@@ -878,6 +1037,42 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Progress Bar & Emoji Bar */}
+          <div className="mt-6 bg-zinc-900/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50 space-y-4">
+            <div className="flex items-center gap-4">
+              <span className="text-xs font-mono text-zinc-500 w-10 text-right">
+                {Math.floor(localProgress / 60)}:{(Math.floor(localProgress % 60)).toString().padStart(2, '0')}
+              </span>
+              <input 
+                type="range" 
+                min={0} 
+                max={duration || 100} 
+                value={localProgress} 
+                onChange={handleSeek}
+                onMouseDown={() => setIsDragging(true)}
+                onMouseUp={() => { setIsDragging(false); handleSeekCommit(); }}
+                onTouchStart={() => setIsDragging(true)}
+                onTouchEnd={() => { setIsDragging(false); handleSeekCommit(); }}
+                className="flex-1 h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+              />
+              <span className="text-xs font-mono text-zinc-500 w-10">
+                {Math.floor(duration / 60)}:{(Math.floor(duration % 60)).toString().padStart(2, '0')}
+              </span>
+            </div>
+
+            <div className="flex justify-center gap-2 sm:gap-4 pt-2 border-t border-zinc-800/50">
+              {EMOJIS.map(emoji => (
+                <button
+                  key={emoji}
+                  onClick={() => sendEmoji(emoji)}
+                  className="text-2xl sm:text-3xl hover:scale-125 transition-transform active:scale-90"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
           </div>
           
           <div className="mt-6 space-y-4">
