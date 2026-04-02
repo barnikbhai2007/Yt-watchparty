@@ -429,26 +429,12 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         const data = snapshot.data() as RoomState;
         setRoom(data);
         
-        // Sync YouTube
-        if (data.mediaType === 'youtube' && data.updatedBy !== auth.currentUser?.uid && player) {
+        // Sync Media
+        if ((data.mediaType === 'youtube' || data.mediaType === 'music') && data.updatedBy !== auth.currentUser?.uid && player) {
           isUpdatingRef.current = true;
           if (data.isPlaying) player.playVideo(); else player.pauseVideo();
           const localTime = player.getCurrentTime();
           if (Math.abs(localTime - data.currentTime) > 2) player.seekTo(data.currentTime, true);
-          setTimeout(() => { isUpdatingRef.current = false; }, 500);
-        }
-
-        // Sync SoundCloud
-        if (data.mediaType === 'music' && data.updatedBy !== auth.currentUser?.uid && scPlayer) {
-          isUpdatingRef.current = true;
-          scPlayer.isPaused((paused: boolean) => {
-            if (data.isPlaying && paused) scPlayer.play();
-            if (!data.isPlaying && !paused) scPlayer.pause();
-          });
-          scPlayer.getPosition((pos: number) => {
-            const localSec = pos / 1000;
-            if (Math.abs(localSec - data.currentTime) > 3) scPlayer.seekTo(data.currentTime * 1000);
-          });
           setTimeout(() => { isUpdatingRef.current = false; }, 500);
         }
       } else {
@@ -624,10 +610,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: `Find 5 YouTube video IDs and titles for: "${searchInput}". Return ONLY a JSON array: [{"id": "...", "title": "...", "thumbnail": "https://img.youtube.com/vi/ID/0.jpg", "url": "https://www.youtube.com/watch?v=ID"}]`,
+        contents: `Find 5 YouTube video IDs for: "${searchInput}". Return ONLY a JSON array of objects: [{"id": "...", "title": "...", "thumbnail": "https://img.youtube.com/vi/ID/0.jpg", "url": "https://www.youtube.com/watch?v=ID"}]. Do not use any tools.`,
         config: {
           responseMimeType: "application/json",
-          tools: [{ googleSearch: {} }],
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
         }
       });
@@ -636,6 +621,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       setSearchResults(results);
     } catch (error) {
       console.error("Search failed:", error);
+      setSearchResults([]);
     } finally {
       setIsSearching(false);
     }
@@ -669,53 +655,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   useEffect(() => {
-    if (room?.mediaType === 'music' && room.musicUrl) {
-      const loadSC = () => {
-        const iframe = document.getElementById('sc-player') as HTMLIFrameElement;
-        if (!iframe) return;
-        
-        // @ts-ignore
-        const widget = window.SC.Widget(iframe);
-        setScPlayer(widget);
-
-        widget.bind('ready', () => {
-          widget.bind('play', () => {
-            if (isUpdatingRef.current) return;
-            widget.getPosition((pos: number) => {
-              updateRoomState({ isPlaying: true, currentTime: pos / 1000 });
-              addActivity('play');
-            });
-          });
-
-          widget.bind('pause', () => {
-            if (isUpdatingRef.current) return;
-            widget.getPosition((pos: number) => {
-              updateRoomState({ isPlaying: false, currentTime: pos / 1000 });
-              addActivity('pause');
-            });
-          });
-
-          widget.bind('seek', (data: any) => {
-            if (isUpdatingRef.current) return;
-            updateRoomState({ currentTime: data.currentPosition / 1000 });
-            addActivity('seek', `to ${Math.floor(data.currentPosition / 1000)}s`);
-          });
-
-          widget.bind('finish', () => {
-            playNext();
-          });
-        });
-      };
-
-      if (!(window as any).SC) {
-        const script = document.createElement('script');
-        script.src = 'https://w.soundcloud.com/player/api.js';
-        script.onload = loadSC;
-        document.body.appendChild(script);
-      } else {
-        loadSC();
-      }
-    }
+    // Music logic removed as we use YouTube player for both modes now.
   }, [room?.musicUrl, room?.mediaType]);
 
   if (!room) return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-white">Loading Party...</div>;
@@ -885,6 +825,21 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     </h3>
                     <p className="text-blue-400 font-bold text-xs uppercase tracking-widest">YT Music Mode</p>
                   </div>
+
+                  <button
+                    onClick={() => {
+                      if (room.isPlaying) {
+                        player?.pauseVideo();
+                        updateRoomState({ isPlaying: false });
+                      } else {
+                        player?.playVideo();
+                        updateRoomState({ isPlaying: true });
+                      }
+                    }}
+                    className="p-4 bg-white text-black rounded-full hover:scale-105 transition-transform shadow-xl"
+                  >
+                    {room.isPlaying ? <Pause size={32} /> : <Play size={32} />}
+                  </button>
 
                   {/* Hidden Player for Audio Sync */}
                   <div className="opacity-0 pointer-events-none absolute inset-0">
