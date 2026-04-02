@@ -138,7 +138,8 @@ async function searchYouTube(query: string) {
       model: "gemini-3-flash-preview",
       contents: `Search for the top 5 YouTube videos for: "${query}". 
       Return a JSON array of objects with "videoId" and "title". 
-      Focus on finding the correct 11-character video IDs.`,
+      Make sure the videoId is the correct 11-character string from the URL.
+      Example: { "videoId": "dQw4w9WgXcQ", "title": "Rick Astley - Never Gonna Give You Up" }`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -162,10 +163,10 @@ async function searchYouTube(query: string) {
     if (!text) return [];
 
     try {
-      return JSON.parse(text);
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : [];
     } catch (e) {
       console.error("JSON parse error:", e);
-      // Fallback: try to extract JSON from text if it's wrapped in markdown
       const match = text.match(/\[.*\]/s);
       if (match) return JSON.parse(match[0]);
       return [];
@@ -176,7 +177,55 @@ async function searchYouTube(query: string) {
   }
 }
 
-// --- Types ---
+async function searchSpotify(query: string) {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      console.error("GEMINI_API_KEY is missing");
+      return [];
+    }
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Search for the top 5 Spotify tracks or playlists for: "${query}". 
+      Return a JSON array of objects with "uri" and "title". 
+      The uri should be in the format "spotify:track:ID" or "spotify:playlist:ID".
+      Example: { "uri": "spotify:track:4cOdK2wGvWyR9p7Riaoffm", "title": "Never Gonna Give You Up - Rick Astley" }`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              uri: { type: Type.STRING },
+              title: { type: Type.STRING }
+            },
+            required: ["uri", "title"]
+          }
+        },
+        tools: [{ googleSearch: {} }]
+      }
+    });
+
+    const text = response.text;
+    console.log("Spotify search response:", text);
+    
+    if (!text) return [];
+
+    try {
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.error("JSON parse error:", e);
+      const match = text.match(/\[.*\]/s);
+      if (match) return JSON.parse(match[0]);
+      return [];
+    }
+  } catch (error) {
+    console.error("Spotify search failed:", error);
+    return [];
+  }
+}
 interface RoomState {
   videoId: string;
   currentTime: number;
@@ -247,7 +296,7 @@ const Login = () => {
   );
 };
 
-const SearchModal = ({ onSelect, onClose }: { onSelect: (id: string) => void, onClose: () => void }) => {
+const SearchModal = ({ type, onSelect, onClose }: { type: 'youtube' | 'spotify', onSelect: (id: string) => void, onClose: () => void }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -258,13 +307,15 @@ const SearchModal = ({ onSelect, onClose }: { onSelect: (id: string) => void, on
     if (!query.trim()) return;
     setLoading(true);
     setError(null);
-    const res = await searchYouTube(query);
+    const res = type === 'youtube' ? await searchYouTube(query) : await searchSpotify(query);
     if (res.length === 0) {
       setError("No results found or search failed. Please try again.");
     }
     setResults(res);
     setLoading(false);
   };
+
+  const isYoutube = type === 'youtube';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
@@ -275,8 +326,8 @@ const SearchModal = ({ onSelect, onClose }: { onSelect: (id: string) => void, on
       >
         <div className="p-6 border-b border-zinc-800 flex items-center justify-between">
           <h2 className="text-xl font-bold flex items-center gap-2">
-            <Search size={20} className="text-red-500" />
-            Search YouTube
+            <Search size={20} className={isYoutube ? "text-red-500" : "text-green-500"} />
+            Search {isYoutube ? "YouTube" : "Spotify"}
           </h2>
           <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-lg transition-colors">
             <X size={20} />
@@ -288,16 +339,22 @@ const SearchModal = ({ onSelect, onClose }: { onSelect: (id: string) => void, on
             <input
               autoFocus
               type="text"
-              placeholder="Search for videos..."
+              placeholder={isYoutube ? "Search for videos..." : "Search for songs or playlists..."}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-800 px-4 py-3 pl-12 rounded-xl focus:outline-none focus:border-red-600 transition-colors"
+              className={cn(
+                "w-full bg-zinc-900 border border-zinc-800 px-4 py-3 pl-12 rounded-xl focus:outline-none transition-colors",
+                isYoutube ? "focus:border-red-600" : "focus:border-green-600"
+              )}
             />
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={20} />
             <button 
               type="submit"
               disabled={loading}
-              className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-red-600 rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50"
+              className={cn(
+                "absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 rounded-lg text-sm font-bold disabled:opacity-50 transition-colors",
+                isYoutube ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700 text-black"
+              )}
             >
               {loading ? "..." : "Search"}
             </button>
@@ -310,23 +367,31 @@ const SearchModal = ({ onSelect, onClose }: { onSelect: (id: string) => void, on
               {error}
             </div>
           )}
-          {results.map((video) => (
+          {results.map((item) => (
             <button
-              key={video.videoId}
-              onClick={() => onSelect(video.videoId)}
+              key={isYoutube ? item.videoId : item.uri}
+              onClick={() => onSelect(isYoutube ? item.videoId : item.uri)}
               className="w-full flex items-center gap-4 p-3 hover:bg-zinc-800 rounded-2xl transition-colors text-left group"
             >
-              <div className="w-32 aspect-video bg-zinc-800 rounded-xl overflow-hidden flex-shrink-0">
-                <img 
-                  src={`https://img.youtube.com/vi/${video.videoId}/mqdefault.jpg`} 
-                  alt={video.title}
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                  referrerPolicy="no-referrer"
-                />
-              </div>
+              {isYoutube ? (
+                <div className="w-32 aspect-video bg-zinc-800 rounded-xl overflow-hidden flex-shrink-0">
+                  <img 
+                    src={`https://img.youtube.com/vi/${item.videoId}/mqdefault.jpg`} 
+                    alt={item.title}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              ) : (
+                <div className="w-12 h-12 bg-green-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Plus size={24} className="text-black" />
+                </div>
+              )}
               <div className="flex-1 min-w-0">
-                <h4 className="font-bold text-zinc-200 line-clamp-2">{video.title}</h4>
-                <p className="text-xs text-zinc-500 mt-1 font-mono uppercase">{video.videoId}</p>
+                <h4 className="font-bold text-zinc-200 line-clamp-2">{item.title}</h4>
+                <p className="text-xs text-zinc-500 mt-1 font-mono uppercase">
+                  {isYoutube ? item.videoId : item.uri}
+                </p>
               </div>
             </button>
           ))}
@@ -339,14 +404,15 @@ const SearchModal = ({ onSelect, onClose }: { onSelect: (id: string) => void, on
   );
 };
 
-const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
+const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spotify') => void }) => {
   const [roomId, setRoomId] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [lobbyType, setLobbyType] = useState<'youtube' | 'spotify'>('youtube');
 
   const handleCreateRoom = async (vid?: string) => {
-    const finalVid = vid || extractVideoId(videoUrl);
-    if (!finalVid) {
+    const finalVid = vid || (lobbyType === 'youtube' ? extractVideoId(videoUrl) : videoUrl);
+    if (!finalVid && lobbyType === 'youtube') {
       alert("Please enter a valid YouTube URL or use search");
       return;
     }
@@ -356,15 +422,16 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
     
     try {
       await setDoc(roomRef, {
-        videoId: finalVid,
+        videoId: lobbyType === 'youtube' ? (finalVid || "") : "",
+        spotifyUri: lobbyType === 'spotify' ? (finalVid || "") : "",
         currentTime: 0,
         isPlaying: false,
         lastUpdated: serverTimestamp(),
         updatedBy: auth.currentUser?.uid,
-        name: "Watch Party",
-        mediaType: 'youtube'
+        name: lobbyType === 'youtube' ? "YouTube Party" : "Spotify Jam",
+        mediaType: lobbyType
       });
-      onJoinRoom(newRoomId);
+      onJoinRoom(newRoomId, lobbyType);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `rooms/${newRoomId}`);
     }
@@ -374,6 +441,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
     <div className="min-h-screen bg-zinc-950 text-white p-6 flex flex-col items-center justify-center">
       {isSearching && (
         <SearchModal 
+          type={lobbyType}
           onSelect={(id) => {
             setIsSearching(false);
             handleCreateRoom(id);
@@ -381,26 +449,53 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
           onClose={() => setIsSearching(false)} 
         />
       )}
-      <div className="max-w-xl w-full space-y-12">
-        <header className="text-center space-y-2">
-          <h1 className="text-5xl font-black tracking-tighter italic">SYNC<span className="text-red-600">TUBE</span></h1>
-          <p className="text-zinc-500 font-medium">Watch YouTube with friends, perfectly in sync.</p>
+      <div className="max-w-4xl w-full space-y-12">
+        <header className="text-center space-y-4">
+          <h1 className="text-6xl font-black tracking-tighter italic">
+            <span className="text-white">SYNC</span>
+            <span className={cn(lobbyType === 'youtube' ? "text-red-600" : "text-green-500")}>
+              {lobbyType === 'youtube' ? "TUBE" : "JAM"}
+            </span>
+          </h1>
+          <div className="flex justify-center gap-4">
+            <button 
+              onClick={() => setLobbyType('youtube')}
+              className={cn(
+                "px-6 py-2 rounded-full font-bold transition-all border-2",
+                lobbyType === 'youtube' ? "bg-red-600 border-red-600 text-white" : "border-zinc-800 text-zinc-500 hover:border-zinc-700"
+              )}
+            >
+              YOUTUBE
+            </button>
+            <button 
+              onClick={() => setLobbyType('spotify')}
+              className={cn(
+                "px-6 py-2 rounded-full font-bold transition-all border-2",
+                lobbyType === 'spotify' ? "bg-green-500 border-green-500 text-white" : "border-zinc-800 text-zinc-500 hover:border-zinc-700"
+              )}
+            >
+              SPOTIFY
+            </button>
+          </div>
         </header>
 
         <div className="grid md:grid-cols-2 gap-8">
           {/* Create Room */}
-          <div className="bg-zinc-900/50 border border-zinc-800 p-8 rounded-3xl space-y-6">
-            <div className="flex items-center gap-3 text-red-500">
-              <Plus size={24} />
-              <h2 className="text-xl font-bold">Create Room</h2>
+          <div className={cn(
+            "bg-zinc-900/50 border p-8 rounded-3xl space-y-6 transition-colors",
+            lobbyType === 'youtube' ? "border-red-900/30" : "border-green-900/30"
+          )}>
+            <div className="flex items-center gap-3">
+              <Plus size={24} className={lobbyType === 'youtube' ? "text-red-500" : "text-green-500"} />
+              <h2 className="text-xl font-bold">Create {lobbyType === 'youtube' ? "Room" : "Jam"}</h2>
             </div>
             <div className="space-y-4">
               <input
                 type="text"
-                placeholder="YouTube URL"
+                placeholder={lobbyType === 'youtube' ? "YouTube URL" : "Spotify Track/Playlist URL"}
                 value={videoUrl}
                 onChange={(e) => setVideoUrl(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-red-600 transition-colors"
+                className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
               />
               <div className="grid grid-cols-2 gap-3">
                 <button
@@ -412,9 +507,13 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
                 </button>
                 <button
                   onClick={() => handleCreateRoom()}
-                  className="py-3 bg-red-600 hover:bg-red-700 font-bold rounded-xl transition-all"
+                  className={cn(
+                    "py-3 font-bold rounded-xl transition-all",
+                    lobbyType === 'youtube' ? "bg-red-600 hover:bg-red-700" : "bg-green-500 hover:bg-green-600",
+                    lobbyType === 'youtube' ? "" : "text-black"
+                  )}
                 >
-                  Start
+                  {lobbyType === 'youtube' ? "Start" : "Start Jam"}
                 </button>
               </div>
             </div>
@@ -424,18 +523,18 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string) => void }) => {
           <div className="bg-zinc-900/50 border border-zinc-800 p-8 rounded-3xl space-y-6">
             <div className="flex items-center gap-3 text-zinc-400">
               <ArrowRight size={24} />
-              <h2 className="text-xl font-bold">Join Room</h2>
+              <h2 className="text-xl font-bold">Join Existing</h2>
             </div>
             <div className="space-y-4">
               <input
                 type="text"
-                placeholder="Room ID"
+                placeholder="Enter ID"
                 value={roomId}
                 onChange={(e) => setRoomId(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
               />
               <button
-                onClick={() => roomId && onJoinRoom(roomId)}
+                onClick={() => roomId && onJoinRoom(roomId, 'youtube')} // Type doesn't matter for join
                 className="w-full py-3 bg-zinc-100 text-black hover:bg-white font-bold rounded-xl transition-all active:scale-[0.98]"
               >
                 Join Party
@@ -626,9 +725,14 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     <div className="min-h-screen bg-zinc-950 text-white flex flex-col h-screen overflow-hidden">
       {isSearching && (
         <SearchModal 
+          type={room.mediaType}
           onSelect={(id) => {
             setIsSearching(false);
-            updateRoomState({ videoId: id, currentTime: 0, isPlaying: false });
+            if (room.mediaType === 'youtube') {
+              updateRoomState({ videoId: id, currentTime: 0, isPlaying: false });
+            } else {
+              updateRoomState({ spotifyUri: id });
+            }
             addActivity('change_video', id);
           }} 
           onClose={() => setIsSearching(false)} 
@@ -941,5 +1045,5 @@ export default function App() {
     return <Room roomId={currentRoomId} onLeave={() => setCurrentRoomId(null)} />;
   }
 
-  return <Lobby onJoinRoom={setCurrentRoomId} />;
+  return <Lobby onJoinRoom={(id) => setCurrentRoomId(id)} />;
 }
