@@ -12,6 +12,7 @@ import {
   updateDoc, 
   serverTimestamp, 
   getDoc,
+  getDocs,
   Timestamp,
   getDocFromServer,
   query,
@@ -44,7 +45,8 @@ import {
   MessageSquare,
   Activity as ActivityIcon,
   X,
-  List
+  List,
+  Edit2
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -200,6 +202,90 @@ const AVATARS = [
   "https://api.dicebear.com/7.x/avataaars/svg?seed=Lily"
 ];
 
+const UserProfile = ({ className }: { className?: string }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [name, setName] = useState(auth.currentUser?.displayName || '');
+  const [selectedAvatar, setSelectedAvatar] = useState(auth.currentUser?.photoURL || AVATARS[0]);
+
+  if (!auth.currentUser) return null;
+
+  const handleSave = async () => {
+    if (!name.trim()) return;
+    try {
+      await updateProfile(auth.currentUser!, {
+        displayName: name,
+        photoURL: selectedAvatar
+      });
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Failed to update profile", error);
+    }
+  };
+
+  return (
+    <>
+      <div className={cn("flex items-center gap-3 bg-zinc-900/80 backdrop-blur-md px-4 py-2 rounded-full border border-zinc-800 shadow-xl", className)}>
+        <img src={auth.currentUser.photoURL || ''} alt="Avatar" className="w-8 h-8 rounded-full bg-zinc-800" />
+        <span className="text-sm font-bold hidden sm:inline">{auth.currentUser.displayName}</span>
+        <button onClick={() => setIsEditing(true)} className="p-1.5 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors" title="Edit Profile">
+          <Edit2 size={16} />
+        </button>
+        <button onClick={() => auth.signOut()} className="p-1.5 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors" title="Logout">
+          <LogOut size={16} />
+        </button>
+      </div>
+
+      {isEditing && (
+        <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl max-w-md w-full space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-bold text-white">Edit Profile</h2>
+              <button onClick={() => setIsEditing(false)} className="text-zinc-500 hover:text-white"><X size={20} /></button>
+            </div>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Your Name</label>
+                <input
+                  type="text"
+                  maxLength={20}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors text-white"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Choose Avatar</label>
+                <div className="grid grid-cols-5 gap-2">
+                  {AVATARS.map((avatar, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setSelectedAvatar(avatar)}
+                      className={cn(
+                        "p-1 rounded-xl transition-all",
+                        selectedAvatar === avatar ? "bg-blue-500 scale-110" : "bg-zinc-800 hover:bg-zinc-700 hover:scale-105"
+                      )}
+                    >
+                      <img src={avatar} alt={`Avatar ${idx + 1}`} className="w-full h-auto rounded-lg" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button
+                onClick={handleSave}
+                disabled={!name.trim()}
+                className="w-full py-3 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all active:scale-[0.98]"
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
 const Login = () => {
   const [name, setName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState(AVATARS[0]);
@@ -288,6 +374,54 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
   const [roomId, setRoomId] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
   const [lobbyType, setLobbyType] = useState<'youtube' | 'music'>('youtube');
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!videoUrl.trim()) return;
+    
+    // If it's a direct URL, just create room
+    if (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be') || videoUrl.includes('soundcloud.com')) {
+      handleCreateRoom();
+      return;
+    }
+
+    setIsSearching(true);
+    setSearchResults([]);
+
+    try {
+      const response = await fetch(`https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(videoUrl)}`);
+      if (!response.ok) throw new Error("Search API request failed");
+      const results = await response.json();
+      setSearchResults(results);
+    } catch (error) {
+      console.error("Search failed:", error);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const createRoomFromSearch = async (result: SearchResult) => {
+    const newRoomId = nanoid(10);
+    const roomRef = doc(db, 'rooms', newRoomId);
+    try {
+      await setDoc(roomRef, {
+        videoId: result.id,
+        musicUrl: "",
+        currentTime: 0,
+        isPlaying: false,
+        lastUpdated: serverTimestamp(),
+        updatedBy: auth.currentUser?.uid,
+        name: lobbyType === 'youtube' ? "YouTube Party" : "Music Jam",
+        mediaType: lobbyType
+      });
+      onJoinRoom(newRoomId, lobbyType);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `rooms/${newRoomId}`);
+    }
+  };
 
   const handleCreateRoom = async () => {
     let finalVid = "";
@@ -329,7 +463,8 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-4 sm:p-6 flex flex-col items-center justify-center">
+    <div className="min-h-screen bg-zinc-950 text-white p-4 sm:p-6 flex flex-col items-center justify-center relative">
+      <UserProfile className="absolute top-4 right-4 z-50" />
       <div className="max-w-4xl w-full space-y-8 sm:space-y-12">
         <header className="text-center space-y-4">
           <h1 className="text-4xl sm:text-6xl font-black tracking-tighter italic">
@@ -371,16 +506,49 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
               <h2 className="text-xl font-bold">Create {lobbyType === 'youtube' ? "Room" : "Jam"}</h2>
             </div>
             <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Paste Link</label>
-                <input
-                  type="text"
-                  placeholder={lobbyType === 'youtube' ? "YouTube Video URL" : "SoundCloud Track URL"}
-                  value={videoUrl}
-                  onChange={(e) => setVideoUrl(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
-                />
-              </div>
+              <form onSubmit={handleSearch} className="space-y-2 relative">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Search or Paste Link</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder={lobbyType === 'youtube' ? "Search or paste YouTube URL" : "Search or paste SoundCloud URL"}
+                    value={videoUrl}
+                    onChange={(e) => setVideoUrl(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 pr-12 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
+                  />
+                  <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-zinc-500 hover:text-white transition-colors">
+                    {isSearching ? <div className="w-4 h-4 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" /> : <Search size={18} />}
+                  </button>
+                </div>
+
+                <AnimatePresence>
+                  {searchResults.length > 0 && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute top-full left-0 right-0 mt-2 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden z-50 max-h-64 overflow-y-auto"
+                    >
+                      {searchResults.map((result) => (
+                        <div key={result.id} className="flex items-center gap-3 p-3 hover:bg-zinc-800 transition-colors group/item">
+                          <img src={result.thumbnail} alt="" className="w-16 h-10 object-cover rounded-lg shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-bold truncate">{result.title}</p>
+                          </div>
+                          <button 
+                            type="button"
+                            onClick={() => createRoomFromSearch(result)}
+                            className="p-2 bg-zinc-100 text-black rounded-lg hover:bg-white transition-colors opacity-0 group-hover/item:opacity-100"
+                            title="Start Party"
+                          >
+                            <Play size={14} fill="currentColor" />
+                          </button>
+                        </div>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </form>
               <button
                 onClick={handleCreateRoom}
                 className={cn(
@@ -420,6 +588,9 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
           </div>
         </div>
       </div>
+      <div className="absolute bottom-4 left-0 right-0 text-center text-zinc-600 text-xs font-medium tracking-wide pointer-events-none">
+        Made with ❤️ in India (brokenaqua - barnik)
+      </div>
     </div>
   );
 };
@@ -436,7 +607,8 @@ const FloatingEmojis = ({ roomId }: { roomId: string }) => {
         if (change.type === 'added') {
           const data = change.doc.data();
           // Only show if it's recent (within last 5 seconds)
-          if (data.timestamp && Date.now() - data.timestamp.toMillis() < 5000) {
+          const time = data.timestamp ? data.timestamp.toMillis() : Date.now();
+          if (Date.now() - time < 5000) {
             const newEmoji = {
               id: change.doc.id + Math.random(), // Ensure unique ID even if same doc triggers
               emoji: data.emoji,
@@ -492,6 +664,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [duration, setDuration] = useState(0);
   const [localProgress, setLocalProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [toasts, setToasts] = useState<{id: string, message: string}[]>([]);
   
   const isUpdatingRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -587,13 +760,25 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         const data = snapshot.data() as RoomState;
         setRoom(data);
         
-        // Sync Media
+        // Sync Media - Fix for background tabs
         if ((data.mediaType === 'youtube' || data.mediaType === 'music') && data.updatedBy !== auth.currentUser?.uid && player) {
-          isUpdatingRef.current = true;
-          if (data.isPlaying) player.playVideo(); else player.pauseVideo();
-          const localTime = player.getCurrentTime();
-          if (Math.abs(localTime - data.currentTime) > 2) player.seekTo(data.currentTime, true);
-          setTimeout(() => { isUpdatingRef.current = false; }, 500);
+          try {
+            const playerState = player.getPlayerState();
+            const isPlayerPlaying = playerState === YouTube.PlayerState.PLAYING;
+            
+            if (data.isPlaying && !isPlayerPlaying) {
+              player.playVideo();
+            } else if (!data.isPlaying && isPlayerPlaying) {
+              player.pauseVideo();
+            }
+
+            const localTime = player.getCurrentTime() || 0;
+            if (Math.abs(localTime - data.currentTime) > 2) {
+              player.seekTo(data.currentTime, true);
+            }
+          } catch (error) {
+            console.error("Player sync error:", error);
+          }
         }
       } else {
         onLeave();
@@ -604,8 +789,36 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       setMessages(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Message)));
     });
 
+    let initialActivitiesLoad = true;
     const unsubActivities = onSnapshot(query(activitiesRef, orderBy('timestamp', 'desc'), limit(20)), (snapshot) => {
-      setActivities(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Activity)));
+      const acts = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Activity));
+      setActivities(acts);
+
+      if (!initialActivitiesLoad) {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            const data = change.doc.data() as Activity;
+            if (data.userId === auth.currentUser?.uid) return; // Don't toast own actions
+            
+            let actionText: string = data.type;
+            switch(data.type) {
+              case 'join': actionText = 'joined the room'; break;
+              case 'leave': actionText = 'left the room'; break;
+              case 'pause': actionText = 'paused the video'; break;
+              case 'play': actionText = 'resumed the video'; break;
+              case 'seek': actionText = `seeked ${data.details || ''}`; break;
+              case 'change_video': actionText = `changed video: ${data.details || ''}`; break;
+            }
+            const msg = `${data.userName} ${actionText}`;
+            const id = change.doc.id;
+            setToasts(prev => [...prev, { id, message: msg }]);
+            setTimeout(() => {
+              setToasts(prev => prev.filter(t => t.id !== id));
+            }, 3000);
+          }
+        });
+      }
+      initialActivitiesLoad = false;
     });
 
     const unsubParticipants = onSnapshot(participantsRef, (snapshot) => {
@@ -660,22 +873,32 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   const playNext = async () => {
-    if (queue.length === 0) return;
-    const nextItem = queue[0];
-    const updates: Partial<RoomState> = {
-      mediaType: nextItem.mediaType,
-      currentTime: 0,
-      isPlaying: true
-    };
-    if (nextItem.mediaType === 'youtube') {
-      updates.videoId = nextItem.mediaId;
-    } else {
-      updates.musicUrl = nextItem.mediaId;
+    const queueRef = collection(db, 'rooms', roomId, 'queue');
+    const q = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
+    try {
+      const snapshot = await getDocs(q);
+      if (snapshot.empty) return;
+      
+      const nextDoc = snapshot.docs[0];
+      const nextItem = { id: nextDoc.id, ...nextDoc.data() } as QueueItem;
+      
+      const updates: Partial<RoomState> = {
+        mediaType: nextItem.mediaType,
+        currentTime: 0,
+        isPlaying: true
+      };
+      if (nextItem.mediaType === 'youtube') {
+        updates.videoId = nextItem.mediaId;
+      } else {
+        updates.musicUrl = nextItem.mediaId;
+      }
+      
+      await updateRoomState(updates);
+      await removeFromQueue(nextItem.id);
+      addActivity('change_video', `playing next: ${nextItem.title}`);
+    } catch (error) {
+      console.error("Failed to play next:", error);
     }
-    
-    await updateRoomState(updates);
-    await removeFromQueue(nextItem.id);
-    addActivity('change_video', `playing next: ${nextItem.title}`);
   };
 
   const updateRoomState = async (updates: Partial<RoomState>) => {
@@ -726,10 +949,14 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   const onPlayerStateChange: YouTubeProps['onStateChange'] = (event) => {
-    if (isUpdatingRef.current) return;
     const newState = event.data;
     const isPlaying = newState === YouTube.PlayerState.PLAYING;
     const currentTime = event.target.getCurrentTime();
+
+    // Prevent echoing back the state if it matches what the room already says
+    if (room && room.isPlaying === isPlaying && Math.abs((room.currentTime || 0) - currentTime) < 2) {
+      return;
+    }
 
     if (newState === YouTube.PlayerState.PLAYING) {
       updateRoomState({ isPlaying, currentTime });
@@ -830,6 +1057,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         </div>
         
         <div className="flex items-center gap-2 sm:gap-3">
+          <UserProfile />
           <button 
             onClick={handleCopyLink}
             className="flex items-center gap-2 px-3 py-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-xs sm:text-sm font-medium transition-all"
@@ -857,6 +1085,24 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+        {/* Toasts */}
+        <div className="absolute bottom-4 left-4 z-[100] flex flex-col gap-2 pointer-events-none">
+          <AnimatePresence>
+            {toasts.map(t => (
+              <motion.div
+                key={t.id}
+                initial={{ opacity: 0, x: -20, scale: 0.9 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="bg-zinc-800 text-white px-4 py-3 rounded-xl shadow-2xl border border-zinc-700 text-sm font-medium flex items-center gap-3"
+              >
+                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                {t.message}
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+
         {/* Player Section */}
         <div className="flex-1 flex flex-col p-4 sm:p-6 overflow-y-auto min-h-0">
           <div className="flex flex-col sm:flex-row gap-4 mb-6">
@@ -932,7 +1178,6 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           </div>
 
           <div className="aspect-video bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0 relative">
-            <FloatingEmojis roomId={roomId} />
             {room.mediaType === 'youtube' ? (
               <YouTube
                 videoId={room.videoId}
@@ -1037,6 +1282,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                 </div>
               </div>
             )}
+            <FloatingEmojis roomId={roomId} />
           </div>
 
           {/* Progress Bar & Emoji Bar */}
