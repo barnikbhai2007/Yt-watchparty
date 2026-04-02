@@ -13,8 +13,8 @@
 // Document ID: {roomId}
 // Fields:
 //   - videoId: string (required) - YouTube video ID (can be empty)
-//   - spotifyUri: string (required) - Spotify URI (can be empty)
-//   - mediaType: string (required) - youtube or spotify
+//   - musicUrl: string (required) - Binimum Music URL (can be empty)
+//   - mediaType: string (required) - youtube or music
 //   - currentTime: number (required) - Current playback time
 //   - isPlaying: bool (required) - Playback state
 //   - lastUpdated: timestamp (required) - Last update time
@@ -44,8 +44,8 @@
 //
 // Subcollection: rooms/{roomId}/queue
 // Fields:
-//   - mediaId: string (required) - YouTube video ID or Spotify URI
-//   - mediaType: string (required) - youtube or spotify
+//   - mediaId: string (required) - YouTube video ID or Binimum Music URL
+//   - mediaType: string (required) - youtube or music
 //   - title: string (required) - Title of the media
 //   - addedBy: string (required) - UID of the user who added it
 //   - addedByName: string (required) - Name of the user who added it
@@ -83,10 +83,10 @@ service cloud.firestore {
     }
 
     function isValidRoom(data) {
-      return data.keys().hasAll(['mediaType', 'currentTime', 'isPlaying', 'lastUpdated', 'updatedBy', 'videoId', 'spotifyUri']) &&
-             data.mediaType in ['youtube', 'spotify'] &&
+      return data.keys().hasAll(['mediaType', 'currentTime', 'isPlaying', 'lastUpdated', 'updatedBy', 'videoId', 'musicUrl']) &&
+             data.mediaType in ['youtube', 'music'] &&
              data.videoId is string &&
-             data.spotifyUri is string &&
+             data.musicUrl is string &&
              data.currentTime is number &&
              data.isPlaying is bool &&
              data.lastUpdated is timestamp &&
@@ -119,7 +119,7 @@ service cloud.firestore {
     function isValidQueueItem(data) {
       return data.keys().hasAll(['mediaId', 'mediaType', 'title', 'addedBy', 'addedByName', 'timestamp']) &&
              data.mediaId is string &&
-             data.mediaType in ['youtube', 'spotify'] &&
+             data.mediaType in ['youtube', 'music'] &&
              data.title is string &&
              data.addedBy == request.auth.uid &&
              data.addedByName is string &&

@@ -124,14 +124,12 @@ function extractVideoId(url: string) {
   return (match && match[7].length === 11) ? match[7] : null;
 }
 
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+
 // --- Utils ---
-function extractSpotifyUri(input: string) {
-  if (input.startsWith('spotify:')) return input;
-  if (input.includes('spotify.com')) {
-    const parts = input.split('?')[0].split('/');
-    const id = parts.pop();
-    const type = input.includes('playlist') ? 'playlist' : 'track';
-    return `spotify:${type}:${id}`;
+function extractSoundCloudUrl(input: string) {
+  if (input.includes('soundcloud.com')) {
+    return input;
   }
   return null;
 }
@@ -143,8 +141,15 @@ interface RoomState {
   lastUpdated: Timestamp;
   updatedBy: string;
   name?: string;
-  mediaType: 'youtube' | 'spotify';
-  spotifyUri?: string;
+  mediaType: 'youtube' | 'music';
+  musicUrl?: string;
+}
+
+interface SearchResult {
+  id: string;
+  title: string;
+  thumbnail: string;
+  url: string;
 }
 
 interface Message {
@@ -173,7 +178,7 @@ interface Participant {
 interface QueueItem {
   id: string;
   mediaId: string;
-  mediaType: 'youtube' | 'spotify';
+  mediaType: 'youtube' | 'music';
   title: string;
   addedBy: string;
   addedByName: string;
@@ -216,27 +221,27 @@ const Login = () => {
   );
 };
 
-const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spotify') => void }) => {
+const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'music') => void }) => {
   const [roomId, setRoomId] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
-  const [lobbyType, setLobbyType] = useState<'youtube' | 'spotify'>('youtube');
+  const [lobbyType, setLobbyType] = useState<'youtube' | 'music'>('youtube');
 
   const handleCreateRoom = async () => {
     let finalVid = "";
-    let finalSpotifyUri = "";
+    let finalMusicUrl = "";
 
     if (lobbyType === 'youtube') {
       finalVid = extractVideoId(videoUrl) || "";
     } else {
-      finalSpotifyUri = extractSpotifyUri(videoUrl) || "";
+      finalMusicUrl = extractSoundCloudUrl(videoUrl) || "";
     }
 
     if (lobbyType === 'youtube' && !finalVid) {
       alert("Please enter a valid YouTube URL");
       return;
     }
-    if (lobbyType === 'spotify' && !finalSpotifyUri) {
-      alert("Please enter a valid Spotify URL or URI");
+    if (lobbyType === 'music' && !finalMusicUrl) {
+      alert("Please enter a valid SoundCloud URL");
       return;
     }
 
@@ -246,12 +251,12 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
     try {
       await setDoc(roomRef, {
         videoId: finalVid || "",
-        spotifyUri: finalSpotifyUri || "",
+        musicUrl: finalMusicUrl || "",
         currentTime: 0,
         isPlaying: false,
         lastUpdated: serverTimestamp(),
         updatedBy: auth.currentUser?.uid,
-        name: lobbyType === 'youtube' ? "YouTube Party" : "Spotify Jam",
+        name: lobbyType === 'youtube' ? "YouTube Party" : "Music Jam",
         mediaType: lobbyType
       });
       onJoinRoom(newRoomId, lobbyType);
@@ -266,7 +271,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
         <header className="text-center space-y-4">
           <h1 className="text-4xl sm:text-6xl font-black tracking-tighter italic">
             <span className="text-white">SYNC</span>
-            <span className={cn(lobbyType === 'youtube' ? "text-red-600" : "text-green-500")}>
+            <span className={cn(lobbyType === 'youtube' ? "text-red-600" : "text-blue-500")}>
               {lobbyType === 'youtube' ? "TUBE" : "JAM"}
             </span>
           </h1>
@@ -281,13 +286,13 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
               YOUTUBE
             </button>
             <button 
-              onClick={() => setLobbyType('spotify')}
+              onClick={() => setLobbyType('music')}
               className={cn(
                 "px-4 sm:px-6 py-2 rounded-full text-sm sm:text-base font-bold transition-all border-2",
-                lobbyType === 'spotify' ? "bg-green-500 border-green-500 text-white" : "border-zinc-800 text-zinc-500 hover:border-zinc-700"
+                lobbyType === 'music' ? "bg-blue-500 border-blue-500 text-white" : "border-zinc-800 text-zinc-500 hover:border-zinc-700"
               )}
             >
-              SPOTIFY
+              MUSIC
             </button>
           </div>
         </header>
@@ -296,10 +301,10 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
           {/* Create Room */}
           <div className={cn(
             "bg-zinc-900/50 border p-6 sm:p-8 rounded-3xl space-y-6 transition-colors",
-            lobbyType === 'youtube' ? "border-red-900/30" : "border-green-900/30"
+            lobbyType === 'youtube' ? "border-red-900/30" : "border-blue-900/30"
           )}>
             <div className="flex items-center gap-3">
-              <Plus size={24} className={lobbyType === 'youtube' ? "text-red-500" : "text-green-500"} />
+              <Plus size={24} className={lobbyType === 'youtube' ? "text-red-500" : "text-blue-500"} />
               <h2 className="text-xl font-bold">Create {lobbyType === 'youtube' ? "Room" : "Jam"}</h2>
             </div>
             <div className="space-y-4">
@@ -307,7 +312,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
                 <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Paste Link</label>
                 <input
                   type="text"
-                  placeholder={lobbyType === 'youtube' ? "YouTube Video URL" : "Spotify Track/Playlist URL"}
+                  placeholder={lobbyType === 'youtube' ? "YouTube Video URL" : "SoundCloud Track URL"}
                   value={videoUrl}
                   onChange={(e) => setVideoUrl(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
@@ -317,7 +322,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
                 onClick={handleCreateRoom}
                 className={cn(
                   "w-full py-3 font-bold rounded-xl transition-all active:scale-[0.98]",
-                  lobbyType === 'youtube' ? "bg-red-600 hover:bg-red-700" : "bg-green-500 hover:bg-green-600 text-black"
+                  lobbyType === 'youtube' ? "bg-red-600 hover:bg-red-700" : "bg-blue-500 hover:bg-blue-600 text-white"
                 )}
               >
                 {lobbyType === 'youtube' ? "Start Party" : "Start Jam"}
@@ -359,6 +364,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type: 'youtube' | 'spo
 const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [player, setPlayer] = useState<any>(null);
+  const [scPlayer, setScPlayer] = useState<any>(null);
   const [copied, setCopied] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
@@ -367,6 +373,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [chatInput, setChatInput] = useState('');
   const [activeTab, setActiveTab] = useState<'chat' | 'activity' | 'queue'>('chat');
   const [showSidebar, setShowSidebar] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
   
   const isUpdatingRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -419,11 +428,27 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       if (snapshot.exists()) {
         const data = snapshot.data() as RoomState;
         setRoom(data);
-        if (data.updatedBy !== auth.currentUser?.uid && player) {
+        
+        // Sync YouTube
+        if (data.mediaType === 'youtube' && data.updatedBy !== auth.currentUser?.uid && player) {
           isUpdatingRef.current = true;
           if (data.isPlaying) player.playVideo(); else player.pauseVideo();
           const localTime = player.getCurrentTime();
           if (Math.abs(localTime - data.currentTime) > 2) player.seekTo(data.currentTime, true);
+          setTimeout(() => { isUpdatingRef.current = false; }, 500);
+        }
+
+        // Sync SoundCloud
+        if (data.mediaType === 'music' && data.updatedBy !== auth.currentUser?.uid && scPlayer) {
+          isUpdatingRef.current = true;
+          scPlayer.isPaused((paused: boolean) => {
+            if (data.isPlaying && paused) scPlayer.play();
+            if (!data.isPlaying && !paused) scPlayer.pause();
+          });
+          scPlayer.getPosition((pos: number) => {
+            const localSec = pos / 1000;
+            if (Math.abs(localSec - data.currentTime) > 3) scPlayer.seekTo(data.currentTime * 1000);
+          });
           setTimeout(() => { isUpdatingRef.current = false; }, 500);
         }
       } else {
@@ -459,6 +484,55 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const addToQueue = async (val: string) => {
+    if (!val.trim()) return;
+    let mediaType: 'youtube' | 'music' = 'youtube';
+    let mediaId = extractVideoId(val);
+    let title = '';
+
+    if (mediaId) {
+      mediaType = room?.mediaType || 'youtube';
+      title = `${mediaType === 'youtube' ? 'YouTube' : 'Music'}: ${mediaId}`;
+    }
+
+    if (!mediaId) return;
+
+    const queueRef = collection(db, 'rooms', roomId, 'queue');
+    await addDoc(queueRef, {
+      mediaId,
+      mediaType,
+      title,
+      addedBy: auth.currentUser?.uid,
+      addedByName: auth.currentUser?.displayName || 'Anonymous',
+      timestamp: serverTimestamp()
+    });
+    addActivity('change_video', `queued ${title}`);
+  };
+
+  const removeFromQueue = async (itemId: string) => {
+    const itemRef = doc(db, 'rooms', roomId, 'queue', itemId);
+    await deleteDoc(itemRef);
+  };
+
+  const playNext = async () => {
+    if (queue.length === 0) return;
+    const nextItem = queue[0];
+    const updates: Partial<RoomState> = {
+      mediaType: nextItem.mediaType,
+      currentTime: 0,
+      isPlaying: true
+    };
+    if (nextItem.mediaType === 'youtube') {
+      updates.videoId = nextItem.mediaId;
+    } else {
+      updates.musicUrl = nextItem.mediaId;
+    }
+    
+    await updateRoomState(updates);
+    await removeFromQueue(nextItem.id);
+    addActivity('change_video', `playing next: ${nextItem.title}`);
+  };
 
   const updateRoomState = async (updates: Partial<RoomState>) => {
     if (isUpdatingRef.current) return;
@@ -503,61 +577,6 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     setChatInput('');
   };
 
-  const addToQueue = async (val: string) => {
-    if (!val.trim()) return;
-    let mediaType: 'youtube' | 'spotify' = 'youtube';
-    let mediaId = extractVideoId(val);
-    let title = '';
-
-    if (mediaId) {
-      mediaType = 'youtube';
-      title = `YouTube: ${mediaId}`;
-    } else {
-      mediaId = extractSpotifyUri(val);
-      if (mediaId) {
-        mediaType = 'spotify';
-        title = `Spotify: ${mediaId.split(':')[2] || mediaId}`;
-      }
-    }
-
-    if (!mediaId) return;
-
-    const queueRef = collection(db, 'rooms', roomId, 'queue');
-    await addDoc(queueRef, {
-      mediaId,
-      mediaType,
-      title,
-      addedBy: auth.currentUser?.uid,
-      addedByName: auth.currentUser?.displayName || 'Anonymous',
-      timestamp: serverTimestamp()
-    });
-    addActivity('change_video', `queued ${title}`);
-  };
-
-  const removeFromQueue = async (itemId: string) => {
-    const itemRef = doc(db, 'rooms', roomId, 'queue', itemId);
-    await deleteDoc(itemRef);
-  };
-
-  const playNext = async () => {
-    if (queue.length === 0) return;
-    const nextItem = queue[0];
-    const updates: Partial<RoomState> = {
-      mediaType: nextItem.mediaType,
-      currentTime: 0,
-      isPlaying: true
-    };
-    if (nextItem.mediaType === 'youtube') {
-      updates.videoId = nextItem.mediaId;
-    } else {
-      updates.spotifyUri = nextItem.mediaId;
-    }
-    
-    await updateRoomState(updates);
-    await removeFromQueue(nextItem.id);
-    addActivity('change_video', `playing next: ${nextItem.title}`);
-  };
-
   const onPlayerReady: YouTubeProps['onReady'] = (event) => {
     setPlayer(event.target);
   };
@@ -593,6 +612,111 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchInput.trim()) return;
+
+    setIsSearching(true);
+    setSearchResults([]);
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Find 5 YouTube video IDs and titles for: "${searchInput}". Return ONLY a JSON array: [{"id": "...", "title": "...", "thumbnail": "https://img.youtube.com/vi/ID/0.jpg", "url": "https://www.youtube.com/watch?v=ID"}]`,
+        config: {
+          responseMimeType: "application/json",
+          tools: [{ googleSearch: {} }],
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
+      });
+
+      const results = JSON.parse(response.text || "[]");
+      setSearchResults(results);
+    } catch (error) {
+      console.error("Search failed:", error);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const selectSearchResult = (result: SearchResult) => {
+    if (room?.mediaType === 'youtube') {
+      updateRoomState({ videoId: result.id, currentTime: 0, isPlaying: true });
+      addActivity('change_video', result.title);
+    } else {
+      updateRoomState({ musicUrl: result.url, currentTime: 0, isPlaying: true });
+      addActivity('change_video', `Music: ${result.title}`);
+    }
+    setSearchResults([]);
+    setSearchInput('');
+  };
+
+  const addToQueueFromResult = async (result: SearchResult) => {
+    const queueRef = collection(db, 'rooms', roomId, 'queue');
+    await addDoc(queueRef, {
+      mediaId: result.id,
+      mediaType: room?.mediaType || 'youtube',
+      title: result.title,
+      addedBy: auth.currentUser?.uid,
+      addedByName: auth.currentUser?.displayName || 'Anonymous',
+      timestamp: serverTimestamp()
+    });
+    addActivity('change_video', `queued ${result.title}`);
+    setSearchResults([]);
+    setSearchInput('');
+  };
+
+  useEffect(() => {
+    if (room?.mediaType === 'music' && room.musicUrl) {
+      const loadSC = () => {
+        const iframe = document.getElementById('sc-player') as HTMLIFrameElement;
+        if (!iframe) return;
+        
+        // @ts-ignore
+        const widget = window.SC.Widget(iframe);
+        setScPlayer(widget);
+
+        widget.bind('ready', () => {
+          widget.bind('play', () => {
+            if (isUpdatingRef.current) return;
+            widget.getPosition((pos: number) => {
+              updateRoomState({ isPlaying: true, currentTime: pos / 1000 });
+              addActivity('play');
+            });
+          });
+
+          widget.bind('pause', () => {
+            if (isUpdatingRef.current) return;
+            widget.getPosition((pos: number) => {
+              updateRoomState({ isPlaying: false, currentTime: pos / 1000 });
+              addActivity('pause');
+            });
+          });
+
+          widget.bind('seek', (data: any) => {
+            if (isUpdatingRef.current) return;
+            updateRoomState({ currentTime: data.currentPosition / 1000 });
+            addActivity('seek', `to ${Math.floor(data.currentPosition / 1000)}s`);
+          });
+
+          widget.bind('finish', () => {
+            playNext();
+          });
+        });
+      };
+
+      if (!(window as any).SC) {
+        const script = document.createElement('script');
+        script.src = 'https://w.soundcloud.com/player/api.js';
+        script.onload = loadSC;
+        document.body.appendChild(script);
+      } else {
+        loadSC();
+      }
+    }
+  }, [room?.musicUrl, room?.mediaType]);
 
   if (!room) return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-white">Loading Party...</div>;
 
@@ -640,28 +764,79 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       <main className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
         {/* Player Section */}
         <div className="flex-1 flex flex-col p-4 sm:p-6 overflow-y-auto min-h-0">
-          <div className="flex gap-2 mb-4">
-            <button 
-              onClick={() => updateRoomState({ mediaType: 'youtube' })}
-              className={cn(
-                "px-4 py-2 rounded-xl text-[10px] sm:text-xs font-bold transition-all",
-                room.mediaType === 'youtube' ? "bg-red-600 text-white" : "bg-zinc-900 text-zinc-500"
-              )}
-            >
-              YOUTUBE
-            </button>
-            <button 
-              onClick={() => updateRoomState({ mediaType: 'spotify' })}
-              className={cn(
-                "px-4 py-2 rounded-xl text-[10px] sm:text-xs font-bold transition-all",
-                room.mediaType === 'spotify' ? "bg-green-600 text-white" : "bg-zinc-900 text-zinc-500"
-              )}
-            >
-              SPOTIFY
-            </button>
+          <div className="flex flex-col sm:flex-row gap-4 mb-6">
+            <div className="flex gap-2">
+              <button 
+                onClick={() => updateRoomState({ mediaType: 'youtube' })}
+                className={cn(
+                  "px-4 py-2 rounded-xl text-[10px] sm:text-xs font-bold transition-all",
+                  room.mediaType === 'youtube' ? "bg-red-600 text-white" : "bg-zinc-900 text-zinc-500"
+                )}
+              >
+                YOUTUBE
+              </button>
+              <button 
+                onClick={() => updateRoomState({ mediaType: 'music' })}
+                className={cn(
+                  "px-4 py-2 rounded-xl text-[10px] sm:text-xs font-bold transition-all",
+                  room.mediaType === 'music' ? "bg-blue-600 text-white" : "bg-zinc-900 text-zinc-500"
+                )}
+              >
+                YT MUSIC
+              </button>
+            </div>
+
+            <form onSubmit={handleSearch} className="flex-1 relative group">
+              <input 
+                type="text"
+                placeholder={room.mediaType === 'youtube' ? "Search YouTube..." : "Search Music..."}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-800 px-4 py-2.5 pr-10 rounded-xl focus:outline-none focus:border-zinc-600 transition-all text-sm"
+              />
+              <button type="submit" className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 group-focus-within:text-white transition-colors">
+                {isSearching ? <div className="w-4 h-4 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" /> : <Search size={18} />}
+              </button>
+
+              <AnimatePresence>
+                {searchResults.length > 0 && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                    className="absolute top-full left-0 right-0 mt-2 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden z-50"
+                  >
+                    {searchResults.map((result) => (
+                      <div key={result.id} className="flex items-center gap-3 p-3 hover:bg-zinc-800 transition-colors group/item">
+                        <img src={result.thumbnail} alt="" className="w-16 h-10 object-cover rounded-lg shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold truncate">{result.title}</p>
+                        </div>
+                        <div className="flex gap-2 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                          <button 
+                            onClick={() => selectSearchResult(result)}
+                            className="p-2 bg-zinc-100 text-black rounded-lg hover:bg-white transition-colors"
+                            title="Play Now"
+                          >
+                            <Play size={14} fill="currentColor" />
+                          </button>
+                          <button 
+                            onClick={() => addToQueueFromResult(result)}
+                            className="p-2 bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 transition-colors"
+                            title="Add to Queue"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </form>
           </div>
 
-          <div className="aspect-video bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0">
+          <div className="aspect-video bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0 relative">
             {room.mediaType === 'youtube' ? (
               <YouTube
                 videoId={room.videoId}
@@ -676,25 +851,71 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                 className="w-full h-full"
               />
             ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center p-4 sm:p-8 bg-zinc-900/50">
-                <div className="w-full max-w-md space-y-4">
-                  <div className="flex items-center gap-3 text-green-500 mb-2 sm:mb-6">
-                    <div className="p-2 sm:p-3 bg-green-500/10 rounded-2xl">
-                      <Plus size={20} sm:size={24} />
-                    </div>
-                    <h3 className="text-lg sm:text-xl font-bold">Spotify Jam</h3>
-                  </div>
-                  
-                  {room.spotifyUri && (
-                    <iframe 
-                      src={`https://open.spotify.com/embed/${room.spotifyUri.split(':')[1]}/${room.spotifyUri.split(':')[2]}`}
-                      width="100%" 
-                      height="352" 
-                      frameBorder="0" 
-                      allow="encrypted-media"
-                      className="rounded-2xl shadow-2xl"
+              <div className="w-full h-full bg-gradient-to-br from-zinc-900 via-blue-950 to-zinc-900 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+                {/* Background Glow */}
+                <div className="absolute inset-0 bg-blue-500/10 blur-[120px] rounded-full scale-150 animate-pulse" />
+                
+                <div className="relative z-10 flex flex-col items-center text-center space-y-6 w-full max-w-sm">
+                  <motion.div 
+                    animate={{ 
+                      scale: room.isPlaying ? [1, 1.05, 1] : 1,
+                      rotate: room.isPlaying ? [0, 2, -2, 0] : 0
+                    }}
+                    transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}
+                    className="relative"
+                  >
+                    <img 
+                      src={`https://img.youtube.com/vi/${room.musicUrl ? extractVideoId(room.musicUrl) || room.videoId : room.videoId}/maxresdefault.jpg`}
+                      alt="Album Art"
+                      className="w-48 h-48 sm:w-64 sm:h-64 object-cover rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = `https://img.youtube.com/vi/${room.musicUrl ? extractVideoId(room.musicUrl) || room.videoId : room.videoId}/0.jpg`;
+                      }}
                     />
-                  )}
+                    {room.isPlaying && (
+                      <div className="absolute -bottom-4 -right-4 bg-blue-600 p-3 rounded-2xl shadow-xl">
+                        <ActivityIcon size={24} className="text-white animate-bounce" />
+                      </div>
+                    )}
+                  </motion.div>
+
+                  <div className="space-y-2">
+                    <h3 className="text-xl sm:text-2xl font-black tracking-tight truncate w-full">
+                      {room.name || "Music Jam"}
+                    </h3>
+                    <p className="text-blue-400 font-bold text-xs uppercase tracking-widest">YT Music Mode</p>
+                  </div>
+
+                  {/* Hidden Player for Audio Sync */}
+                  <div className="opacity-0 pointer-events-none absolute inset-0">
+                    <YouTube
+                      videoId={room.musicUrl ? extractVideoId(room.musicUrl) || room.videoId : room.videoId}
+                      opts={{
+                        width: '100%',
+                        height: '100%',
+                        playerVars: { autoplay: 0, controls: 0, modestbranding: 1, rel: 0 },
+                      }}
+                      onReady={onPlayerReady}
+                      onStateChange={onPlayerStateChange}
+                      onEnd={onPlayerEnd}
+                    />
+                  </div>
+                </div>
+
+                {/* Visualizer Bars */}
+                <div className="absolute bottom-0 left-0 right-0 h-24 flex items-end justify-center gap-1 px-4 opacity-30">
+                  {[...Array(20)].map((_, i) => (
+                    <motion.div
+                      key={i}
+                      animate={{ height: room.isPlaying ? [20, 60, 30, 80, 40] : 10 }}
+                      transition={{ 
+                        repeat: Infinity, 
+                        duration: 0.5 + Math.random(), 
+                        delay: i * 0.05 
+                      }}
+                      className="w-1 bg-blue-500 rounded-t-full"
+                    />
+                  ))}
                 </div>
               </div>
             )}
@@ -702,68 +923,37 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           
           <div className="mt-6 space-y-4">
             <div className="bg-zinc-900/30 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50">
-              <h3 className="text-sm font-bold text-zinc-500 uppercase tracking-widest mb-4">Change Media</h3>
               <div className="flex flex-col sm:flex-row gap-3">
-                <input 
-                  type="text"
-                  placeholder={room.mediaType === 'youtube' ? "Paste YouTube Link" : "Paste Spotify Link"}
-                  className="flex-1 bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors text-sm"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const val = (e.target as HTMLInputElement).value;
-                      const vid = extractVideoId(val);
-                      const uri = extractSpotifyUri(val);
-                      
-                      if (vid) {
-                        updateRoomState({ mediaType: 'youtube', videoId: vid, currentTime: 0, isPlaying: true });
-                        addActivity('change_video', vid);
+                <div className="flex-1 relative">
+                  <input 
+                    type="text"
+                    placeholder="Paste Link to Queue..."
+                    className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors text-sm"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const val = (e.target as HTMLInputElement).value;
+                        addToQueue(val);
                         (e.target as HTMLInputElement).value = '';
-                      } else if (uri) {
-                        updateRoomState({ mediaType: 'spotify', spotifyUri: uri, currentTime: 0, isPlaying: true });
-                        addActivity('change_video', `Spotify: ${uri.split(':')[1]}`);
-                        (e.target as HTMLInputElement).value = '';
-                      }
-                    }
-                  }}
-                />
-                <div className="flex gap-2">
-                  <button 
-                    onClick={(e) => {
-                      const input = (e.currentTarget.parentElement?.previousSibling as HTMLInputElement);
-                      const val = input.value;
-                      const vid = extractVideoId(val);
-                      const uri = extractSpotifyUri(val);
-                      
-                      if (vid) {
-                        updateRoomState({ mediaType: 'youtube', videoId: vid, currentTime: 0, isPlaying: true });
-                        addActivity('change_video', vid);
-                        input.value = '';
-                      } else if (uri) {
-                        updateRoomState({ mediaType: 'spotify', spotifyUri: uri, currentTime: 0, isPlaying: true });
-                        addActivity('change_video', `Spotify: ${uri.split(':')[1]}`);
-                        input.value = '';
                       }
                     }}
-                    className={cn(
-                      "flex-1 sm:flex-none px-6 py-3 rounded-xl font-bold text-sm transition-all active:scale-95",
-                      room.mediaType === 'youtube' ? "bg-red-600" : "bg-green-600 text-black"
-                    )}
-                  >
-                    Play Now
-                  </button>
-                  <button 
-                    onClick={(e) => {
-                      const input = (e.currentTarget.parentElement?.previousSibling as HTMLInputElement);
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-zinc-600 uppercase tracking-widest hidden sm:block">
+                    Paste Link
+                  </div>
+                </div>
+                <button 
+                  onClick={(e) => {
+                    const input = (e.currentTarget.previousSibling?.firstChild as HTMLInputElement);
+                    if (input) {
                       addToQueue(input.value);
                       input.value = '';
-                    }}
-                    className="flex-1 sm:flex-none px-6 py-3 rounded-xl font-bold text-sm bg-zinc-800 hover:bg-zinc-700 transition-all active:scale-95"
-                  >
-                    Add Queue
-                  </button>
-                </div>
+                    }
+                  }}
+                  className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-bold text-sm transition-all active:scale-95"
+                >
+                  Add to Queue
+                </button>
               </div>
-              <p className="text-[10px] text-zinc-600 mt-2 italic">Play Now replaces current media. Add Queue puts it in the line.</p>
             </div>
 
             <div className="flex items-center gap-4 bg-zinc-900/30 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50">

@@ -9,13 +9,13 @@
           "type": "string",
           "description": "The YouTube video ID"
         },
-        "spotifyUri": {
+        "musicUrl": {
           "type": "string",
-          "description": "The Spotify track or playlist URI"
+          "description": "The Binimum Music URL"
         },
         "mediaType": {
           "type": "string",
-          "enum": ["youtube", "spotify"],
+          "enum": ["youtube", "music"],
           "description": "The type of media being played"
         },
         "currentTime": {
@@ -108,8 +108,8 @@
       "description": "An item in the media queue",
       "type": "object",
       "properties": {
-        "mediaId": { "type": "string", "description": "YouTube video ID or Spotify URI" },
-        "mediaType": { "type": "string", "enum": ["youtube", "spotify"] },
+        "mediaId": { "type": "string", "description": "YouTube video ID or Binimum Music URL" },
+        "mediaType": { "type": "string", "enum": ["youtube", "music"] },
         "title": { "type": "string", "description": "Title of the media" },
         "addedBy": { "type": "string", "description": "UID of the user who added it" },
         "addedByName": { "type": "string", "description": "Name of the user who added it" },
