@@ -1628,7 +1628,10 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             </form>
           </div>
 
-          <div className="aspect-video bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0 relative">
+          <div className={cn(
+            "bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0 relative",
+            room.mediaType === 'youtube' ? "aspect-video" : "h-[450px] sm:h-[500px]"
+          )}>
             {room.mediaType === 'youtube' ? (
               room.videoId ? (
                 <YouTube
