@@ -151,6 +151,7 @@ interface RoomState {
   title?: string;
   mediaType: 'youtube' | 'music';
   musicUrl?: string;
+  repeat: boolean;
 }
 
 interface SearchResult {
@@ -888,13 +889,25 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
   const addToQueue = async (val: string) => {
     if (!val.trim()) return;
-    let mediaType: 'youtube' | 'music' = 'youtube';
+    let mediaType: 'youtube' | 'music' = room?.mediaType || 'youtube';
     let mediaId = extractVideoId(val);
-    let title = '';
+    let title = 'Unknown Title';
 
     if (mediaId) {
-      mediaType = room?.mediaType || 'youtube';
-      title = `${mediaType === 'youtube' ? 'YouTube' : 'Music'}: ${mediaId}`;
+      try {
+        const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${mediaId}&format=json`);
+        if (response.ok) {
+          const data = await response.json();
+          title = data.title;
+        }
+      } catch (e) {
+        console.error("Failed to fetch title", e);
+        title = `Video: ${mediaId}`;
+      }
+    } else {
+      // Maybe it's a SoundCloud URL, just use the URL as ID for now
+      mediaId = val;
+      title = 'Music Link';
     }
 
     if (!mediaId) return;
@@ -917,6 +930,22 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   const playNext = async () => {
+    if (room?.repeat) {
+      await updateRoomState({ currentTime: 0, isPlaying: true });
+      return;
+    }
+    
+    // Add current to history
+    if (room && room.videoId) {
+      const historyRef = collection(db, 'rooms', roomId, 'history');
+      await addDoc(historyRef, {
+        mediaId: room.videoId,
+        mediaType: room.mediaType,
+        title: room.title,
+        timestamp: serverTimestamp()
+      });
+    }
+
     const queueRef = collection(db, 'rooms', roomId, 'queue');
     const q = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
     try {
@@ -944,6 +973,43 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       console.error("Failed to play next:", error);
     }
   };
+
+  const playPrevious = async () => {
+    const historyRef = collection(db, 'rooms', roomId, 'history');
+    const q = query(historyRef, orderBy('timestamp', 'desc'), limit(1));
+    try {
+      const snapshot = await getDocs(q);
+      if (snapshot.empty) return;
+      
+      const prevDoc = snapshot.docs[0];
+      const prevItem = { id: prevDoc.id, ...prevItemData(prevDoc.data()) } as QueueItem;
+      
+      const updates: Partial<RoomState> = {
+        mediaType: prevItem.mediaType,
+        currentTime: 0,
+        isPlaying: true,
+        title: prevItem.title,
+        videoId: prevItem.mediaId
+      };
+      if (prevItem.mediaType === 'music') {
+        updates.musicUrl = prevItem.mediaId;
+      }
+      
+      await updateRoomState(updates);
+      await deleteDoc(prevDoc.ref); // Remove from history
+      addActivity('change_video', `playing previous: ${prevItem.title}`);
+    } catch (error) {
+      console.error("Failed to play previous:", error);
+    }
+  };
+
+  const prevItemData = (data: any) => ({
+    ...data,
+    mediaId: data.mediaId,
+    mediaType: data.mediaType,
+    title: data.title,
+    timestamp: data.timestamp
+  });
 
   const updateRoomState = async (updates: Partial<RoomState>) => {
     if (isUpdatingRef.current) return;
@@ -1333,7 +1399,10 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     <button className="text-zinc-400 hover:text-white transition-colors">
                       <Repeat size={20} />
                     </button>
-                    <button className="text-zinc-400 hover:text-white transition-colors">
+                    <button
+                      onClick={playPrevious}
+                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors"
+                    >
                       <SkipBack size={24} fill="currentColor" />
                     </button>
                     <button
@@ -1355,8 +1424,20 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     >
                       {room.isPlaying ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" className="ml-1" />}
                     </button>
-                    <button onClick={playNext} className="text-zinc-400 hover:text-white transition-colors">
+                    <button
+                      onClick={playNext}
+                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors"
+                    >
                       <SkipForward size={24} fill="currentColor" />
+                    </button>
+                    <button
+                      onClick={() => updateRoomState({ repeat: !room.repeat })}
+                      className={cn(
+                        "p-2 hover:bg-zinc-800 rounded-full transition-colors",
+                        room.repeat ? "text-blue-500" : "text-zinc-500"
+                      )}
+                    >
+                      <Repeat size={24} />
                     </button>
                   </div>
 
