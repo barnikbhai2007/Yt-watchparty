@@ -49,7 +49,8 @@ import {
   Edit2,
   SkipBack,
   SkipForward,
-  Repeat
+  Repeat,
+  Shuffle
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -151,7 +152,8 @@ interface RoomState {
   title?: string;
   mediaType: 'youtube' | 'music';
   musicUrl?: string;
-  repeat: boolean;
+  repeatMode: 'off' | 'one' | 'all';
+  isShuffled: boolean;
 }
 
 interface SearchResult {
@@ -441,7 +443,8 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
         name: lobbyType === 'youtube' ? "YouTube Party" : "Music Jam",
         title: result.title,
         mediaType: lobbyType,
-        repeat: false
+        repeatMode: 'off',
+        isShuffled: false
       });
       onJoinRoom(newRoomId, lobbyType);
     } catch (error) {
@@ -483,7 +486,8 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
         updatedBy: auth.currentUser?.uid,
         name: lobbyType === 'youtube' ? "YouTube Party" : "Music Jam",
         mediaType: lobbyType,
-        repeat: false
+        repeatMode: 'off',
+        isShuffled: false
       });
       onJoinRoom(newRoomId, lobbyType);
     } catch (error) {
@@ -932,13 +936,16 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   const playNext = async () => {
-    if (room?.repeat) {
+    if (!room) return;
+
+    // Handle Repeat One
+    if (room.repeatMode === 'one') {
       await updateRoomState({ currentTime: 0, isPlaying: true });
       return;
     }
-    
-    // Add current to history
-    if (room && room.videoId) {
+
+    // Add current to history (unless repeating)
+    if (room.videoId) {
       const historyRef = collection(db, 'rooms', roomId, 'history');
       await addDoc(historyRef, {
         mediaId: room.videoId,
@@ -946,12 +953,34 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         title: room.title || "Unknown Title",
         timestamp: serverTimestamp()
       });
+      
+      // If Repeat All, add back to queue
+      if (room.repeatMode === 'all') {
+        const queueRef = collection(db, 'rooms', roomId, 'queue');
+        await addDoc(queueRef, {
+          mediaId: room.videoId,
+          mediaType: room.mediaType,
+          title: room.title || "Unknown Title",
+          addedBy: auth.currentUser?.uid,
+          addedByName: auth.currentUser?.displayName || 'System',
+          timestamp: serverTimestamp()
+        });
+      }
     }
 
     const queueRef = collection(db, 'rooms', roomId, 'queue');
-    const q = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
     try {
-      const snapshot = await getDocs(q);
+      let snapshot;
+      if (room.isShuffled) {
+        // Pick random item from queue
+        const allDocs = await getDocs(queueRef);
+        if (allDocs.empty) return;
+        snapshot = { docs: [allDocs.docs[Math.floor(Math.random() * allDocs.docs.length)]], empty: false };
+      } else {
+        const q = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
+        snapshot = await getDocs(q);
+      }
+
       if (snapshot.empty) return;
       
       const nextDoc = snapshot.docs[0];
@@ -977,6 +1006,8 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   const playPrevious = async () => {
+    if (!room) return;
+    
     const historyRef = collection(db, 'rooms', roomId, 'history');
     const q = query(historyRef, orderBy('timestamp', 'desc'), limit(1));
     try {
@@ -984,8 +1015,32 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       if (snapshot.empty) return;
       
       const prevDoc = snapshot.docs[0];
-      const prevItem = { id: prevDoc.id, ...prevItemData(prevDoc.data()) } as QueueItem;
+      const prevItem = { id: prevDoc.id, ...prevItemData(prevDoc.data()) } as any;
       
+      // Add current song to the FRONT of the queue
+      if (room.videoId) {
+        const queueRef = collection(db, 'rooms', roomId, 'queue');
+        // Get the current first item's timestamp to set an earlier one
+        const firstItemQ = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
+        const firstItemSnap = await getDocs(firstItemQ);
+        let newTimestamp = serverTimestamp();
+        if (!firstItemSnap.empty) {
+          const firstTs = firstItemSnap.docs[0].data().timestamp;
+          if (firstTs && firstTs.toMillis) {
+            newTimestamp = Timestamp.fromMillis(firstTs.toMillis() - 1000);
+          }
+        }
+        
+        await addDoc(queueRef, {
+          mediaId: room.videoId,
+          mediaType: room.mediaType,
+          title: room.title || "Unknown Title",
+          addedBy: auth.currentUser?.uid,
+          addedByName: auth.currentUser?.displayName || 'System',
+          timestamp: newTimestamp
+        });
+      }
+
       const updates: Partial<RoomState> = {
         mediaType: prevItem.mediaType,
         currentTime: 0,
@@ -1012,6 +1067,23 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     title: data.title,
     timestamp: data.timestamp
   });
+
+  const toggleRepeat = () => {
+    if (!room) return;
+    const modes: ('off' | 'one' | 'all')[] = ['off', 'one', 'all'];
+    const currentIndex = modes.indexOf(room.repeatMode || 'off');
+    const nextIndex = (currentIndex + 1) % modes.length;
+    updateRoomState({ repeatMode: modes[nextIndex] });
+  };
+
+  const toggleShuffle = () => {
+    if (!room) return;
+    updateRoomState({ isShuffled: !room.isShuffled });
+  };
+
+  const addEmojiToChat = (emoji: string) => {
+    setChatInput(prev => prev + emoji);
+  };
 
   const updateRoomState = async (updates: Partial<RoomState>) => {
     if (isUpdatingRef.current) return;
@@ -1404,8 +1476,14 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                   </div>
 
                   <div className="flex items-center justify-center gap-6 pt-2 z-50">
-                    <button className="text-zinc-400 hover:text-white transition-colors">
-                      <Repeat size={20} />
+                    <button
+                      onClick={toggleShuffle}
+                      className={cn(
+                        "p-2 hover:bg-zinc-800 rounded-full transition-colors",
+                        room.isShuffled ? "text-blue-500" : "text-zinc-500"
+                      )}
+                    >
+                      <Shuffle size={20} />
                     </button>
                     <button
                       onClick={playPrevious}
@@ -1439,13 +1517,19 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                       <SkipForward size={24} fill="currentColor" />
                     </button>
                     <button
-                      onClick={() => updateRoomState({ repeat: !room.repeat })}
+                      onClick={toggleRepeat}
                       className={cn(
-                        "p-2 hover:bg-zinc-800 rounded-full transition-colors",
-                        room.repeat ? "text-blue-500" : "text-zinc-500"
+                        "p-2 hover:bg-zinc-800 rounded-full transition-colors relative",
+                        room.repeatMode !== 'off' ? "text-blue-500" : "text-zinc-500"
                       )}
                     >
                       <Repeat size={24} />
+                      {room.repeatMode === 'one' && (
+                        <span className="absolute -top-1 -right-1 text-[8px] font-bold bg-blue-500 text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950">1</span>
+                      )}
+                      {room.repeatMode === 'all' && (
+                        <span className="absolute -top-1 -right-1 text-[8px] font-bold bg-blue-500 text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950">A</span>
+                      )}
                     </button>
                   </div>
 
@@ -1684,6 +1768,19 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             <div ref={chatEndRef} />
           </div>
 
+          {activeTab === 'chat' && (
+            <div className="px-4 py-2 border-t border-zinc-900 bg-zinc-950 flex gap-2 overflow-x-auto no-scrollbar">
+              {EMOJIS.map(emoji => (
+                <button
+                  key={emoji}
+                  onClick={() => addEmojiToChat(emoji)}
+                  className="text-lg hover:scale-125 transition-transform shrink-0"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          )}
           {activeTab === 'chat' && (
             <form onSubmit={sendMessage} className="p-4 border-t border-zinc-900 bg-zinc-950">
               <div className="relative">
