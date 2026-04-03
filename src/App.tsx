@@ -1118,6 +1118,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       setSearchResults(results);
     } catch (error) {
       console.error("Search failed:", error);
+      if (error instanceof TypeError) {
+        console.error("This might be a CORS issue or network error.");
+      }
       setSearchResults([]);
     } finally {
       setIsSearching(false);
