@@ -1303,8 +1303,19 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     const isPlaying = newState === YouTube.PlayerState.PLAYING;
     const currentTime = event.target.getCurrentTime();
 
+    // Only the leader should sync their player state to Firestore
+    const isLeader = participants[0]?.uid === auth.currentUser?.uid;
+    if (!isLeader) return;
+
     // Prevent echoing back the state if it matches what the room already says
     if (room && room.isPlaying === isPlaying && Math.abs((room.currentTime || 0) - currentTime) < 2) {
+      return;
+    }
+
+    // CRITICAL: If the tab is hidden (backgrounded), the browser might auto-pause.
+    // We should NOT sync this auto-pause to other users, as it would stop the music for everyone.
+    if (newState === YouTube.PlayerState.PAUSED && document.visibilityState === 'hidden') {
+      console.log("Ignoring background auto-pause to preserve background play for others.");
       return;
     }
 
@@ -1643,40 +1654,51 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                 {/* Background Glow */}
                 <div className="absolute inset-0 bg-blue-500/10 blur-[120px] rounded-full scale-150 animate-pulse" />
                 
-                <div className="relative z-10 flex flex-col items-center text-center space-y-6 w-full max-w-sm">
+                <div className="relative z-10 flex flex-col items-center text-center space-y-4 sm:space-y-6 w-full max-w-sm">
                   <motion.div 
                     animate={{ 
-                      scale: room.isPlaying ? [1, 1.05, 1] : 1,
-                      rotate: room.isPlaying ? [0, 2, -2, 0] : 0
+                      scale: room.isPlaying ? [1, 1.02, 1] : 1,
+                      rotate: room.isPlaying ? [0, 1, -1, 0] : 0
                     }}
                     transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}
                     className="relative"
                   >
-                    <img 
-                      src={`https://img.youtube.com/vi/${room.videoId}/maxresdefault.jpg`}
-                      alt="Album Art"
-                      className="w-48 h-48 sm:w-64 sm:h-64 object-cover rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10"
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        if (!target.src.endsWith('0.jpg')) {
-                          target.src = `https://img.youtube.com/vi/${room.videoId}/0.jpg`;
-                        } else {
-                          target.src = 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop';
-                        }
-                      }}
-                    />
+                    <div className="w-40 h-40 sm:w-64 sm:h-64 rounded-3xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10 bg-zinc-800 flex items-center justify-center">
+                      {room.videoId ? (
+                        <img 
+                          src={`https://img.youtube.com/vi/${room.videoId}/mqdefault.jpg`}
+                          alt="Album Art"
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            target.src = 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop';
+                          }}
+                        />
+                      ) : (
+                        <ActivityIcon size={48} className="text-zinc-700" />
+                      )}
+                    </div>
                     {room.isPlaying && (
-                      <div className="absolute -bottom-4 -right-4 bg-blue-600 p-3 rounded-2xl shadow-xl">
-                        <ActivityIcon size={24} className="text-white animate-bounce" />
+                      <div className={cn(
+                        "absolute -bottom-2 -right-2 p-2 sm:p-3 rounded-2xl shadow-xl transition-colors",
+                        room.mediaType === 'youtube' ? "bg-red-600" : "bg-blue-600"
+                      )}>
+                        <ActivityIcon size={20} className="text-white animate-bounce" />
                       </div>
                     )}
                   </motion.div>
 
-                  <div className="space-y-2">
-                    <h3 className="text-xl sm:text-2xl font-black tracking-tight truncate w-full px-4">
+                  <div className="space-y-1">
+                    <h3 className="text-lg sm:text-2xl font-black tracking-tight truncate w-full px-4">
                       {room.title || room.name || "Music Jam"}
                     </h3>
-                    <p className="text-blue-400 font-bold text-[10px] uppercase tracking-[0.2em]">YT Music Mode</p>
+                    <p className={cn(
+                      "font-bold text-[10px] uppercase tracking-[0.2em]",
+                      room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500"
+                    )}>
+                      {room.mediaType === 'music' ? 'YT Music Mode' : 'Audio Only Mode'}
+                    </p>
                   </div>
 
                   <div className="w-full px-8 z-50">
@@ -1702,21 +1724,21 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-center gap-6 pt-2 z-50">
+                  <div className="flex items-center justify-center gap-4 sm:gap-6 pt-2 z-50">
                     <button
                       onClick={toggleShuffle}
                       className={cn(
                         "p-2 hover:bg-zinc-800 rounded-full transition-colors",
-                        room.isShuffled ? "text-blue-500" : "text-zinc-500"
+                        room.isShuffled ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
                       )}
                     >
-                      <Shuffle size={20} />
+                      <Shuffle size={18} className="sm:w-5 sm:h-5" />
                     </button>
                     <button
                       onClick={playPrevious}
-                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors"
+                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors text-zinc-400"
                     >
-                      <SkipBack size={24} fill="currentColor" />
+                      <SkipBack size={20} className="sm:w-6 sm:h-6" fill="currentColor" />
                     </button>
                     <button
                       onClick={() => {
@@ -1731,31 +1753,37 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                       }}
                       disabled={!player}
                       className={cn(
-                        "w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center bg-white text-black rounded-full hover:scale-110 transition-all shadow-[0_0_50px_rgba(255,255,255,0.2)] active:scale-95",
+                        "w-14 h-14 sm:w-20 sm:h-20 flex items-center justify-center bg-white text-black rounded-full hover:scale-110 transition-all shadow-[0_0_50px_rgba(255,255,255,0.2)] active:scale-95",
                         !player && "opacity-50 cursor-not-allowed"
                       )}
                     >
-                      {room.isPlaying ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" className="ml-1" />}
+                      {room.isPlaying ? <Pause size={28} className="sm:w-8 sm:h-8" fill="currentColor" /> : <Play size={28} className="sm:w-8 sm:h-8 ml-1" fill="currentColor" />}
                     </button>
                     <button
                       onClick={playNext}
-                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors"
+                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors text-zinc-400"
                     >
-                      <SkipForward size={24} fill="currentColor" />
+                      <SkipForward size={20} className="sm:w-6 sm:h-6" fill="currentColor" />
                     </button>
                     <button
                       onClick={toggleRepeat}
                       className={cn(
                         "p-2 hover:bg-zinc-800 rounded-full transition-colors relative",
-                        room.repeatMode !== 'off' ? "text-blue-500" : "text-zinc-500"
+                        room.repeatMode !== 'off' ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
                       )}
                     >
-                      <Repeat size={24} />
+                      <Repeat size={18} className="sm:w-5 sm:h-5" />
                       {room.repeatMode === 'one' && (
-                        <span className="absolute -top-1 -right-1 text-[8px] font-bold bg-blue-500 text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950">1</span>
+                        <span className={cn(
+                          "absolute -top-1 -right-1 text-[8px] font-bold text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950",
+                          room.mediaType === 'youtube' ? "bg-red-500" : "bg-blue-500"
+                        )}>1</span>
                       )}
                       {room.repeatMode === 'all' && (
-                        <span className="absolute -top-1 -right-1 text-[8px] font-bold bg-blue-500 text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950">A</span>
+                        <span className={cn(
+                          "absolute -top-1 -right-1 text-[8px] font-bold text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950",
+                          room.mediaType === 'youtube' ? "bg-red-500" : "bg-blue-500"
+                        )}>A</span>
                       )}
                     </button>
                   </div>
@@ -2047,7 +2075,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           onClick={() => setShowSidebar(false)}
           className={cn(
             "flex flex-col items-center gap-1 transition-all",
-            !showSidebar ? "text-blue-500" : "text-zinc-500"
+            !showSidebar ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
           )}
         >
           <Play size={20} fill={!showSidebar ? "currentColor" : "none"} />
@@ -2060,7 +2088,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           }}
           className={cn(
             "flex flex-col items-center gap-1 transition-all",
-            (showSidebar && activeTab === 'chat') ? "text-blue-500" : "text-zinc-500"
+            (showSidebar && activeTab === 'chat') ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
           )}
         >
           <MessageSquare size={20} fill={(showSidebar && activeTab === 'chat') ? "currentColor" : "none"} />
@@ -2073,7 +2101,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           }}
           className={cn(
             "flex flex-col items-center gap-1 transition-all",
-            (showSidebar && activeTab === 'queue') ? "text-blue-500" : "text-zinc-500"
+            (showSidebar && activeTab === 'queue') ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
           )}
         >
           <List size={20} />
@@ -2086,7 +2114,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           }}
           className={cn(
             "flex flex-col items-center gap-1 transition-all",
-            (showSidebar && activeTab === 'activity') ? "text-blue-500" : "text-zinc-500"
+            (showSidebar && activeTab === 'activity') ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
           )}
         >
           <ActivityIcon size={20} />
