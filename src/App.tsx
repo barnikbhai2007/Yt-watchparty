@@ -58,6 +58,26 @@ import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
 import { auth, db } from './firebase';
 
+// --- Logo Component ---
+const Logo = ({ className = "w-8 h-8" }: { className?: string }) => (
+  <div className={cn("relative flex items-center justify-center", className)}>
+    <svg viewBox="0 0 100 100" className="w-full h-full">
+      <defs>
+        <linearGradient id="logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#3b82f6" />
+          <stop offset="100%" stopColor="#1d4ed8" />
+        </linearGradient>
+      </defs>
+      {/* Outer swirling paths */}
+      <circle cx="50" cy="50" r="45" fill="none" stroke="url(#logo-grad)" strokeWidth="8" strokeDasharray="180 100" className="animate-[spin_8s_linear_infinite]" />
+      <circle cx="50" cy="50" r="35" fill="none" stroke="#60a5fa" strokeWidth="4" strokeDasharray="120 60" className="animate-[spin_12s_linear_infinite_reverse]" />
+      {/* Inner person icon */}
+      <circle cx="50" cy="42" r="10" fill="url(#logo-grad)" />
+      <path d="M50 55c-12 0-22 8-22 18h44c0-10-10-18-22-18z" fill="url(#logo-grad)" />
+    </svg>
+  </div>
+);
+
 // --- Utils ---
 enum OperationType {
   CREATE = 'create',
@@ -540,14 +560,21 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-4 sm:p-6 flex flex-col items-center justify-center relative">
+    <div className="min-h-screen bg-zinc-950 text-white p-4 sm:p-6 flex flex-col items-center justify-center relative overflow-hidden">
       <UserProfile className="absolute top-4 right-4 z-50" />
-      <div className="max-w-4xl w-full space-y-8 sm:space-y-12">
-        <header className="text-center space-y-4">
-          <h1 className="text-4xl sm:text-6xl font-black tracking-tighter italic">
+      
+      {/* Background Glows */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-blue-600/10 blur-[120px] rounded-full -z-10" />
+      <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-red-600/5 blur-[100px] rounded-full -z-10" />
+
+      <div className="max-w-4xl w-full space-y-8 sm:space-y-12 relative z-10">
+        <header className="text-center space-y-6 flex flex-col items-center">
+          <Logo className="w-24 h-24 sm:w-32 sm:h-32 drop-shadow-[0_0_30px_rgba(59,130,246,0.3)]" />
+          <h1 className="text-5xl sm:text-7xl font-black tracking-tighter italic flex items-center gap-2">
             <span className="text-white">SYNC</span>
+            <span className="text-blue-500">·</span>
             <span className={cn(lobbyType === 'youtube' ? "text-red-600" : "text-blue-500")}>
-              {lobbyType === 'youtube' ? "TUBE" : "JAM"}
+              ME
             </span>
           </h1>
           <div className="flex justify-center gap-2 sm:gap-4">
@@ -1469,9 +1496,14 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           <button onClick={onLeave} className="p-1.5 sm:p-2 hover:bg-zinc-900 rounded-lg transition-colors">
             <LogOut size={18} className="rotate-180 sm:w-5 sm:h-5" />
           </button>
-          <div className="min-w-0">
-            <h2 className="font-bold text-xs sm:text-lg leading-tight truncate max-w-[100px] sm:max-w-none">{room.name || "Watch Party"}</h2>
-            <p className="text-[8px] sm:text-xs text-zinc-500 font-mono uppercase tracking-wider truncate">{roomId}</p>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Logo className="w-6 h-6 sm:w-8 sm:h-8" />
+            <div className="min-w-0">
+              <h2 className="font-bold text-xs sm:text-lg leading-tight truncate max-w-[100px] sm:max-w-none">
+                {room.name || "Sync-Me Room"}
+              </h2>
+              <p className="text-[8px] sm:text-xs text-zinc-500 font-mono uppercase tracking-wider truncate">{roomId}</p>
+            </div>
           </div>
         </div>
         
