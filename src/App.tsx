@@ -769,6 +769,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchInput, setSearchInput] = useState('');
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
   
   const [isAutoQueue, setIsAutoQueue] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -930,7 +931,23 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     });
 
     const unsubMessages = onSnapshot(query(messagesRef, orderBy('timestamp', 'asc'), limit(50)), (snapshot) => {
-      setMessages(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Message)));
+      const newMessages = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Message));
+      setMessages(newMessages);
+
+      // Check for new messages to show notification dot
+      snapshot.docChanges().forEach(change => {
+        if (change.type === 'added') {
+          const data = change.doc.data() as Message;
+          // If message is from someone else and chat is not active
+          if (data.senderId !== auth.currentUser?.uid) {
+            // We use a functional update or refs if needed, but here we can check the current state
+            // Note: inside onSnapshot, showSidebar and activeTab might be stale if not handled carefully
+            // but usually React state in onSnapshot is fine if the effect is re-run or if we use refs.
+            // However, we can also just set it to true and let the other effect clear it.
+            setHasUnreadMessages(true);
+          }
+        }
+      });
     });
 
     let initialActivitiesLoad = true;
@@ -982,6 +999,12 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       unsubQueue();
     };
   }, [roomId, player, onLeave]);
+
+  useEffect(() => {
+    if (showSidebar && activeTab === 'chat') {
+      setHasUnreadMessages(false);
+    }
+  }, [showSidebar, activeTab]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1519,9 +1542,12 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           
           <button 
             onClick={() => setShowSidebar(!showSidebar)}
-            className="hidden lg:flex p-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-zinc-400"
+            className="hidden lg:flex p-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-zinc-400 relative"
           >
             <MessageSquare size={20} />
+            {hasUnreadMessages && !(showSidebar && activeTab === 'chat') && (
+              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-600 rounded-full border-2 border-zinc-900 animate-pulse" />
+            )}
           </button>
 
           <div className="hidden sm:flex -space-x-2">
@@ -2120,13 +2146,19 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           onClick={() => {
             setActiveTab('chat');
             setShowSidebar(true);
+            setHasUnreadMessages(false);
           }}
           className={cn(
-            "flex flex-col items-center gap-1 transition-all",
+            "flex flex-col items-center gap-1 transition-all relative",
             (showSidebar && activeTab === 'chat') ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
           )}
         >
-          <MessageSquare size={20} fill={(showSidebar && activeTab === 'chat') ? "currentColor" : "none"} />
+          <div className="relative">
+            <MessageSquare size={20} fill={(showSidebar && activeTab === 'chat') ? "currentColor" : "none"} />
+            {hasUnreadMessages && !(showSidebar && activeTab === 'chat') && (
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-600 rounded-full border-2 border-zinc-950 animate-pulse" />
+            )}
+          </div>
           <span className="text-[10px] font-bold">CHAT</span>
         </button>
         <button 
