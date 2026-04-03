@@ -418,14 +418,56 @@ const Login = () => {
   );
 };
 
+function extractRoomId(input: string) {
+  if (!input) return '';
+  const trimmed = input.trim();
+  if (trimmed.includes('#')) {
+    return trimmed.split('#').pop() || '';
+  }
+  if (trimmed.includes('/')) {
+    return trimmed.split('/').pop() || '';
+  }
+  return trimmed;
+}
+
 const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'music') => void }) => {
   const [roomId, setRoomId] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
   const [lobbyType, setLobbyType] = useState<'youtube' | 'music'>('youtube');
   const [isSearching, setIsSearching] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
   const [isAutoQueue, setIsAutoQueue] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  const [toasts, setToasts] = useState<{id: string, message: string}[]>([]);
+  const addToast = (message: string) => {
+    const id = nanoid();
+    setToasts(prev => [...prev, { id, message }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
+  };
+
+  const handleJoinExisting = async () => {
+    const id = extractRoomId(roomId);
+    if (!id) return;
+
+    setIsJoining(true);
+    try {
+      const roomRef = doc(db, 'rooms', id);
+      const roomSnap = await getDoc(roomRef);
+      
+      if (roomSnap.exists()) {
+        onJoinRoom(id);
+      } else {
+        addToast("Room not found. Please check the ID.");
+      }
+    } catch (error) {
+      console.error("Error joining room:", error);
+      addToast("Failed to join room. Try again.");
+    } finally {
+      setIsJoining(false);
+    }
+  };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -671,27 +713,47 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
           </div>
 
           {/* Join Room */}
-          <div className="bg-zinc-900/50 border border-zinc-800 p-6 sm:p-8 rounded-3xl space-y-6">
+          <div className="bg-zinc-900/50 border border-zinc-800 p-6 sm:p-8 rounded-3xl space-y-6 relative">
+            {/* Toasts for Lobby */}
+            <div className="absolute -top-12 left-0 right-0 flex flex-col items-center gap-2 pointer-events-none z-50">
+              <AnimatePresence>
+                {toasts.map(t => (
+                  <motion.div
+                    key={t.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className="bg-zinc-800 text-white px-4 py-2 rounded-lg shadow-xl border border-zinc-700 text-xs font-medium"
+                  >
+                    {t.message}
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+
             <div className="flex items-center gap-3 text-zinc-400">
               <ArrowRight size={24} />
               <h2 className="text-xl font-bold">Join Existing</h2>
             </div>
             <div className="space-y-4">
               <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Room ID</label>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Room ID or Link</label>
                 <input
                   type="text"
-                  placeholder="Enter ID"
+                  placeholder="Enter ID or paste link"
                   value={roomId}
                   onChange={(e) => setRoomId(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleJoinExisting()}
                   className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
                 />
               </div>
               <button
-                onClick={() => roomId && onJoinRoom(roomId)}
-                className="w-full py-3 bg-zinc-100 text-black hover:bg-white font-bold rounded-xl transition-all active:scale-[0.98]"
+                onClick={handleJoinExisting}
+                disabled={isJoining || !roomId.trim()}
+                className="w-full py-3 bg-zinc-100 text-black hover:bg-white font-bold rounded-xl transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                Join Party
+                {isJoining && <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />}
+                {isJoining ? "Joining..." : "Join Party"}
               </button>
             </div>
           </div>
@@ -1727,13 +1789,18 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     <div className="w-40 h-40 sm:w-64 sm:h-64 rounded-3xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10 bg-zinc-800 flex items-center justify-center">
                       {room.videoId ? (
                         <img 
-                          src={`https://img.youtube.com/vi/${room.videoId}/mqdefault.jpg`}
+                          src={`https://img.youtube.com/vi/${room.videoId}/hqdefault.jpg`}
                           alt="Album Art"
                           className="w-full h-full object-cover"
                           referrerPolicy="no-referrer"
                           onError={(e) => {
                             const target = e.target as HTMLImageElement;
-                            target.src = 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop';
+                            // Try sddefault if hqdefault fails, then fallback
+                            if (target.src.includes('hqdefault')) {
+                              target.src = `https://img.youtube.com/vi/${room.videoId}/mqdefault.jpg`;
+                            } else {
+                              target.src = 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop';
+                            }
                           }}
                         />
                       ) : (
