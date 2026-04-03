@@ -856,8 +856,8 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         const data = snapshot.data() as RoomState;
         setRoom(data);
         
-        // Sync Media - Fix for background tabs
-        if ((data.mediaType === 'youtube' || data.mediaType === 'music') && data.updatedBy !== auth.currentUser?.uid && player) {
+        // Sync Media - Fix for background tabs and refresh
+        if ((data.mediaType === 'youtube' || data.mediaType === 'music') && player) {
           try {
             const playerState = player.getPlayerState();
             const isPlayerPlaying = playerState === YouTube.PlayerState.PLAYING;
@@ -869,8 +869,21 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             }
 
             const localTime = player.getCurrentTime() || 0;
-            if (Math.abs(localTime - data.currentTime) > 2) {
-              player.seekTo(data.currentTime, true);
+            let targetTime = data.currentTime;
+
+            // Calculate drift if playing to sync precisely on refresh
+            if (data.isPlaying && data.lastUpdated) {
+              const lastUpdated = data.lastUpdated.toMillis();
+              const now = Date.now();
+              const drift = (now - lastUpdated) / 1000;
+              targetTime += drift;
+            }
+
+            // Only sync if drift is significant (> 2s) or if it's the first sync after refresh
+            if (Math.abs(localTime - targetTime) > 2 || data.updatedBy !== auth.currentUser?.uid) {
+              if (Math.abs(localTime - targetTime) > 2) {
+                player.seekTo(targetTime, true);
+              }
             }
           } catch (error) {
             console.error("Player sync error:", error);
@@ -918,7 +931,8 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     });
 
     const unsubParticipants = onSnapshot(participantsRef, (snapshot) => {
-      setParticipants(snapshot.docs.map(d => d.data() as Participant));
+      const parts = snapshot.docs.map(d => d.data() as Participant);
+      setParticipants(parts.sort((a, b) => a.uid.localeCompare(b.uid)));
     });
 
     const unsubQueue = onSnapshot(query(queueRef, orderBy('timestamp', 'asc')), (snapshot) => {
@@ -937,6 +951,24 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    if (!room?.isPlaying || !player || !roomId || !auth.currentUser) return;
+    
+    // Only the "leader" (first participant) updates the time periodically to avoid conflicts
+    if (participants[0]?.uid !== auth.currentUser.uid) return;
+
+    const interval = setInterval(() => {
+      try {
+        const currentTime = player.getCurrentTime();
+        if (currentTime !== undefined) {
+          updateRoomState({ currentTime });
+        }
+      } catch (e) {}
+    }, 10000); // Update every 10s to keep time fresh for new joiners
+
+    return () => clearInterval(interval);
+  }, [room?.isPlaying, player, roomId, participants]);
 
   const addToQueue = async (val: string) => {
     if (!val.trim()) return;
@@ -1019,14 +1051,19 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
     const queueRef = collection(db, 'rooms', roomId, 'queue');
     try {
-      const q = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
-      const snapshot = await getDocs(q);
-
-      if (snapshot.empty) {
-        // If queue is empty but repeat all is on, it might have just added itself back
-        // But we already checked snapshot. Let's just return if nothing in queue.
-        return;
+      let snapshot;
+      if (room.isShuffled) {
+        // Pick random item from queue
+        const allDocs = await getDocs(queueRef);
+        if (allDocs.empty) return;
+        const randomIndex = Math.floor(Math.random() * allDocs.docs.length);
+        snapshot = { docs: [allDocs.docs[randomIndex]], empty: false };
+      } else {
+        const q = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
+        snapshot = await getDocs(q);
       }
+
+      if (snapshot.empty) return;
       
       const nextDoc = snapshot.docs[0];
       const nextItem = { id: nextDoc.id, ...nextDoc.data() } as QueueItem;
