@@ -411,9 +411,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
     setSearchResults([]);
 
     try {
-      const searchUrl = lobbyType === 'music' 
-        ? `https://yt-music-ijigk717q-ljh2.vercel.app/api/search?q=${encodeURIComponent(videoUrl)}`
-        : `https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(videoUrl)}`;
+      const searchUrl = `/api/proxy/search?q=${encodeURIComponent(videoUrl)}`;
       
       const response = await fetch(searchUrl);
       if (!response.ok) throw new Error("Search API request failed");
@@ -895,7 +893,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
     if (mediaId) {
       try {
-        const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${mediaId}&format=json`);
+        const response = await fetch(`/api/proxy/oembed?url=https://www.youtube.com/watch?v=${mediaId}`);
         if (response.ok) {
           const data = await response.json();
           title = data.title;
@@ -1103,10 +1101,8 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     setSearchResults([]);
 
     try {
-      // Using the user's custom yt-search backend
-      const searchUrl = room?.mediaType === 'music'
-        ? `https://yt-music-ijigk717q-ljh2.vercel.app/api/search?q=${encodeURIComponent(searchInput)}`
-        : `https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(searchInput)}`;
+      // Using the user's custom yt-search backend provided via proxy to bypass CORS
+      const searchUrl = `/api/proxy/search?q=${encodeURIComponent(searchInput)}`;
 
       const response = await fetch(searchUrl);
       

@@ -2,13 +2,41 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import dotenv from 'dotenv';
+import axios from 'axios';
+import cors from 'cors';
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
 
+app.use(cors());
 app.use(express.json());
+
+// Proxy API to bypass CORS
+app.get('/api/proxy/search', async (req, res) => {
+  const { q } = req.query;
+  const searchUrl = `https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(q as string)}`;
+
+  try {
+    const response = await axios.get(searchUrl);
+    res.json(response.data);
+  } catch (error: any) {
+    console.error("Proxy search failed:", error.message);
+    res.status(error.response?.status || 500).json({ error: "Proxy search failed" });
+  }
+});
+
+app.get('/api/proxy/oembed', async (req, res) => {
+  const { url } = req.query;
+  try {
+    const response = await axios.get(`https://www.youtube.com/oembed?url=${encodeURIComponent(url as string)}&format=json`);
+    res.json(response.data);
+  } catch (error: any) {
+    console.error("Proxy oembed failed:", error.message);
+    res.status(error.response?.status || 500).json({ error: "Proxy oembed failed" });
+  }
+});
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
