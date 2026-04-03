@@ -46,7 +46,10 @@ import {
   Activity as ActivityIcon,
   X,
   List,
-  Edit2
+  Edit2,
+  SkipBack,
+  SkipForward,
+  Repeat
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -120,7 +123,8 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-function extractVideoId(url: string) {
+function extractVideoId(url: string | undefined | null) {
+  if (!url) return null;
   const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
   const match = url.match(regExp);
   return (match && match[7].length === 11) ? match[7] : null;
@@ -129,7 +133,8 @@ function extractVideoId(url: string) {
 import { GoogleGenAI } from "@google/genai";
 
 // --- Utils ---
-function extractSoundCloudUrl(input: string) {
+function extractSoundCloudUrl(input: string | undefined | null) {
+  if (!input) return null;
   if (input.includes('soundcloud.com')) {
     return input;
   }
@@ -143,6 +148,7 @@ interface RoomState {
   lastUpdated: Timestamp;
   updatedBy: string;
   name?: string;
+  title?: string;
   mediaType: 'youtube' | 'music';
   musicUrl?: string;
 }
@@ -159,6 +165,7 @@ interface Message {
   text: string;
   senderId: string;
   senderName: string;
+  photoURL?: string;
   timestamp: Timestamp;
 }
 
@@ -174,6 +181,7 @@ interface Activity {
 interface Participant {
   uid: string;
   displayName: string;
+  photoURL?: string;
   lastSeen: Timestamp;
 }
 
@@ -225,7 +233,7 @@ const UserProfile = ({ className }: { className?: string }) => {
   return (
     <>
       <div className={cn("flex items-center gap-3 bg-zinc-900/80 backdrop-blur-md px-4 py-2 rounded-full border border-zinc-800 shadow-xl", className)}>
-        <img src={auth.currentUser.photoURL || ''} alt="Avatar" className="w-8 h-8 rounded-full bg-zinc-800" />
+        <img src={auth.currentUser.photoURL || undefined} alt="Avatar" className="w-8 h-8 rounded-full bg-zinc-800" />
         <span className="text-sm font-bold hidden sm:inline">{auth.currentUser.displayName}</span>
         <button onClick={() => setIsEditing(true)} className="p-1.5 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors" title="Edit Profile">
           <Edit2 size={16} />
@@ -376,6 +384,17 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
   const [lobbyType, setLobbyType] = useState<'youtube' | 'music'>('youtube');
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
+        setSearchResults([]);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -391,7 +410,11 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
     setSearchResults([]);
 
     try {
-      const response = await fetch(`https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(videoUrl)}`);
+      const searchUrl = lobbyType === 'music' 
+        ? `https://yt-music-ijigk717q-ljh2.vercel.app/api/search?q=${encodeURIComponent(videoUrl)}`
+        : `https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(videoUrl)}`;
+      
+      const response = await fetch(searchUrl);
       if (!response.ok) throw new Error("Search API request failed");
       const results = await response.json();
       setSearchResults(results);
@@ -411,10 +434,11 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
         videoId: result.id,
         musicUrl: "",
         currentTime: 0,
-        isPlaying: false,
+        isPlaying: true,
         lastUpdated: serverTimestamp(),
         updatedBy: auth.currentUser?.uid,
         name: lobbyType === 'youtube' ? "YouTube Party" : "Music Jam",
+        title: result.title,
         mediaType: lobbyType
       });
       onJoinRoom(newRoomId, lobbyType);
@@ -429,17 +453,19 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
 
     if (lobbyType === 'youtube') {
       finalVid = extractVideoId(videoUrl) || "";
+      if (!finalVid) {
+        alert("Please enter a valid YouTube URL");
+        return;
+      }
     } else {
       finalMusicUrl = extractSoundCloudUrl(videoUrl) || "";
-    }
-
-    if (lobbyType === 'youtube' && !finalVid) {
-      alert("Please enter a valid YouTube URL");
-      return;
-    }
-    if (lobbyType === 'music' && !finalMusicUrl) {
-      alert("Please enter a valid SoundCloud URL");
-      return;
+      if (!finalMusicUrl) {
+        finalVid = extractVideoId(videoUrl) || "";
+        if (!finalVid) {
+          alert("Please enter a valid YouTube or SoundCloud URL");
+          return;
+        }
+      }
     }
 
     const newRoomId = nanoid(10);
@@ -450,7 +476,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
         videoId: finalVid || "",
         musicUrl: finalMusicUrl || "",
         currentTime: 0,
-        isPlaying: false,
+        isPlaying: true,
         lastUpdated: serverTimestamp(),
         updatedBy: auth.currentUser?.uid,
         name: lobbyType === 'youtube' ? "YouTube Party" : "Music Jam",
@@ -506,7 +532,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
               <h2 className="text-xl font-bold">Create {lobbyType === 'youtube' ? "Room" : "Jam"}</h2>
             </div>
             <div className="space-y-4">
-              <form onSubmit={handleSearch} className="space-y-2 relative">
+              <form onSubmit={handleSearch} className="space-y-2 relative" ref={searchContainerRef}>
                 <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Search or Paste Link</label>
                 <div className="relative">
                   <input
@@ -514,6 +540,11 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
                     placeholder={lobbyType === 'youtube' ? "Search or paste YouTube URL" : "Search or paste SoundCloud URL"}
                     value={videoUrl}
                     onChange={(e) => setVideoUrl(e.target.value)}
+                    onFocus={() => {
+                      if (videoUrl.trim() && searchResults.length === 0) {
+                        handleSearch(new Event('submit') as any);
+                      }
+                    }}
                     className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 pr-12 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
                   />
                   <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-zinc-500 hover:text-white transition-colors">
@@ -531,7 +562,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
                     >
                       {searchResults.map((result) => (
                         <div key={result.id} className="flex items-center gap-3 p-3 hover:bg-zinc-800 transition-colors group/item">
-                          <img src={result.thumbnail} alt="" className="w-16 h-10 object-cover rounded-lg shrink-0" />
+                          <img src={result.thumbnail || undefined} alt="" className="w-16 h-10 object-cover rounded-lg shrink-0" />
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-bold truncate">{result.title}</p>
                           </div>
@@ -626,13 +657,13 @@ const FloatingEmojis = ({ roomId }: { roomId: string }) => {
   }, [roomId]);
 
   return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden z-50">
+    <div className="fixed inset-0 pointer-events-none overflow-hidden z-[100]">
       <AnimatePresence>
         {emojis.map(e => (
           <motion.div
             key={e.id}
-            initial={{ y: '100%', opacity: 1, x: `${e.x}%`, scale: 0.5 }}
-            animate={{ y: '-20%', opacity: 0, scale: 2.5 }}
+            initial={{ y: '20vh', opacity: 1, x: `${e.x}vw`, scale: 0.5 }}
+            animate={{ y: '-120vh', opacity: 0, scale: 2.5 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 2.5, ease: 'easeOut' }}
             className="absolute bottom-0 text-4xl sm:text-6xl"
@@ -668,6 +699,18 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   
   const isUpdatingRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
+        setSearchResults([]);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     let interval: any;
@@ -720,6 +763,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       await setDoc(participantRef, {
         uid: auth.currentUser?.uid,
         displayName: auth.currentUser?.displayName,
+        photoURL: auth.currentUser?.photoURL || '',
         lastSeen: serverTimestamp()
       }, { merge: true });
     };
@@ -885,11 +929,11 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       const updates: Partial<RoomState> = {
         mediaType: nextItem.mediaType,
         currentTime: 0,
-        isPlaying: true
+        isPlaying: true,
+        title: nextItem.title,
+        videoId: nextItem.mediaId
       };
-      if (nextItem.mediaType === 'youtube') {
-        updates.videoId = nextItem.mediaId;
-      } else {
+      if (nextItem.mediaType === 'music') {
         updates.musicUrl = nextItem.mediaId;
       }
       
@@ -939,6 +983,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       text: chatInput,
       senderId: auth.currentUser?.uid,
       senderName: auth.currentUser?.displayName || 'Anonymous',
+      photoURL: auth.currentUser?.photoURL || '',
       timestamp: serverTimestamp()
     });
     setChatInput('');
@@ -993,7 +1038,11 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
     try {
       // Using the user's custom yt-search backend
-      const response = await fetch(`https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(searchInput)}`);
+      const searchUrl = room?.mediaType === 'music'
+        ? `https://yt-music-ijigk717q-ljh2.vercel.app/api/search?q=${encodeURIComponent(searchInput)}`
+        : `https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(searchInput)}`;
+
+      const response = await fetch(searchUrl);
       
       if (!response.ok) {
         throw new Error("Search API request failed");
@@ -1010,13 +1059,21 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   const selectSearchResult = (result: SearchResult) => {
-    if (room?.mediaType === 'youtube') {
-      updateRoomState({ videoId: result.id, currentTime: 0, isPlaying: true });
-      addActivity('change_video', result.title);
-    } else {
-      updateRoomState({ musicUrl: result.url, currentTime: 0, isPlaying: true });
+    const updates: Partial<RoomState> = {
+      videoId: result.id,
+      title: result.title,
+      currentTime: 0,
+      isPlaying: true
+    };
+    
+    if (room?.mediaType === 'music') {
+      updates.musicUrl = result.url;
       addActivity('change_video', `Music: ${result.title}`);
+    } else {
+      addActivity('change_video', result.title);
     }
+    
+    updateRoomState(updates);
     setSearchResults([]);
     setSearchInput('');
   };
@@ -1075,9 +1132,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
           <div className="hidden sm:flex -space-x-2">
             {participants.slice(0, 3).map((p) => (
-              <div key={p.uid} className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-zinc-800 border-2 border-zinc-950 flex items-center justify-center text-[10px] sm:text-xs font-bold" title={p.displayName}>
-                {p.displayName[0]}
-              </div>
+              p.photoURL ? (
+                <img key={p.uid} src={p.photoURL} alt={p.displayName} className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-zinc-800 border-2 border-zinc-950 object-cover" title={p.displayName} />
+              ) : (
+                <div key={p.uid} className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-zinc-800 border-2 border-zinc-950 flex items-center justify-center text-[10px] sm:text-xs font-bold" title={p.displayName}>
+                  {p.displayName[0]}
+                </div>
+              )
             ))}
           </div>
         </div>
@@ -1127,12 +1188,18 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
               </button>
             </div>
 
-            <form onSubmit={handleSearch} className="flex-1 relative group">
+            <form onSubmit={handleSearch} className="flex-1 relative group" ref={searchContainerRef}>
               <input 
                 type="text"
                 placeholder={room.mediaType === 'youtube' ? "Search YouTube..." : "Search Music..."}
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
+                onFocus={() => {
+                  if (searchInput.trim() && searchResults.length === 0) {
+                    // Re-trigger search if focused and has input but no results
+                    handleSearch(new Event('submit') as any);
+                  }
+                }}
                 className="w-full bg-zinc-900 border border-zinc-800 px-4 py-2.5 pr-10 rounded-xl focus:outline-none focus:border-zinc-600 transition-all text-sm"
               />
               <button type="submit" className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 group-focus-within:text-white transition-colors">
@@ -1149,7 +1216,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                   >
                     {searchResults.map((result) => (
                       <div key={result.id} className="flex items-center gap-3 p-3 hover:bg-zinc-800 transition-colors group/item">
-                        <img src={result.thumbnail} alt="" className="w-16 h-10 object-cover rounded-lg shrink-0" />
+                        <img src={result.thumbnail || undefined} alt="" className="w-16 h-10 object-cover rounded-lg shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-bold truncate">{result.title}</p>
                         </div>
@@ -1179,18 +1246,25 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
           <div className="aspect-video bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0 relative">
             {room.mediaType === 'youtube' ? (
-              <YouTube
-                videoId={room.videoId}
-                opts={{
-                  width: '100%',
-                  height: '100%',
-                  playerVars: { autoplay: 0, controls: 1, modestbranding: 1, rel: 0 },
-                }}
-                onReady={onPlayerReady}
-                onStateChange={onPlayerStateChange}
-                onEnd={onPlayerEnd}
-                className="w-full h-full"
-              />
+              room.videoId ? (
+                <YouTube
+                  videoId={room.videoId || ""}
+                  opts={{
+                    width: '100%',
+                    height: '100%',
+                    playerVars: { autoplay: 0, controls: 1, modestbranding: 1, rel: 0 },
+                  }}
+                  onReady={onPlayerReady}
+                  onStateChange={onPlayerStateChange}
+                  onEnd={onPlayerEnd}
+                  onError={(e) => console.error("YouTube Player Error:", e.data)}
+                  className="w-full h-full"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-zinc-500">
+                  No video selected
+                </div>
+              )
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-zinc-900 via-blue-950 to-zinc-900 flex flex-col items-center justify-center p-6 relative overflow-hidden">
                 {/* Background Glow */}
@@ -1206,11 +1280,16 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     className="relative"
                   >
                     <img 
-                      src={`https://img.youtube.com/vi/${room.musicUrl ? extractVideoId(room.musicUrl) || room.videoId : room.videoId}/maxresdefault.jpg`}
+                      src={`https://img.youtube.com/vi/${room.videoId}/maxresdefault.jpg`}
                       alt="Album Art"
                       className="w-48 h-48 sm:w-64 sm:h-64 object-cover rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10"
                       onError={(e) => {
-                        (e.target as HTMLImageElement).src = `https://img.youtube.com/vi/${room.musicUrl ? extractVideoId(room.musicUrl) || room.videoId : room.videoId}/0.jpg`;
+                        const target = e.target as HTMLImageElement;
+                        if (!target.src.endsWith('0.jpg')) {
+                          target.src = `https://img.youtube.com/vi/${room.videoId}/0.jpg`;
+                        } else {
+                          target.src = 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop';
+                        }
                       }}
                     />
                     {room.isPlaying && (
@@ -1222,12 +1301,41 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
                   <div className="space-y-2">
                     <h3 className="text-xl sm:text-2xl font-black tracking-tight truncate w-full px-4">
-                      {room.name || "Music Jam"}
+                      {room.title || room.name || "Music Jam"}
                     </h3>
                     <p className="text-blue-400 font-bold text-[10px] uppercase tracking-[0.2em]">YT Music Mode</p>
                   </div>
 
-                  <div className="flex items-center justify-center gap-8 pt-4">
+                  <div className="w-full px-8 z-50">
+                    <div className="flex items-center gap-4">
+                      <span className="text-xs font-mono text-zinc-400 w-10 text-right">
+                        {Math.floor(localProgress / 60)}:{(Math.floor(localProgress % 60)).toString().padStart(2, '0')}
+                      </span>
+                      <input 
+                        type="range" 
+                        min={0} 
+                        max={duration || 100} 
+                        value={localProgress} 
+                        onChange={handleSeek}
+                        onMouseDown={() => setIsDragging(true)}
+                        onMouseUp={() => { setIsDragging(false); handleSeekCommit(); }}
+                        onTouchStart={() => setIsDragging(true)}
+                        onTouchEnd={() => { setIsDragging(false); handleSeekCommit(); }}
+                        className="flex-1 h-2 bg-zinc-800/50 rounded-lg appearance-none cursor-pointer accent-white backdrop-blur-sm"
+                      />
+                      <span className="text-xs font-mono text-zinc-400 w-10">
+                        {Math.floor(duration / 60)}:{(Math.floor(duration % 60)).toString().padStart(2, '0')}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-center gap-6 pt-2 z-50">
+                    <button className="text-zinc-400 hover:text-white transition-colors">
+                      <Repeat size={20} />
+                    </button>
+                    <button className="text-zinc-400 hover:text-white transition-colors">
+                      <SkipBack size={24} fill="currentColor" />
+                    </button>
                     <button
                       onClick={() => {
                         if (!player) return;
@@ -1241,27 +1349,36 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                       }}
                       disabled={!player}
                       className={cn(
-                        "w-20 h-20 flex items-center justify-center bg-white text-black rounded-full hover:scale-110 transition-all shadow-[0_0_50px_rgba(255,255,255,0.2)] active:scale-95 z-50",
+                        "w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center bg-white text-black rounded-full hover:scale-110 transition-all shadow-[0_0_50px_rgba(255,255,255,0.2)] active:scale-95",
                         !player && "opacity-50 cursor-not-allowed"
                       )}
                     >
-                      {room.isPlaying ? <Pause size={40} fill="currentColor" /> : <Play size={40} fill="currentColor" className="ml-1" />}
+                      {room.isPlaying ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" className="ml-1" />}
+                    </button>
+                    <button onClick={playNext} className="text-zinc-400 hover:text-white transition-colors">
+                      <SkipForward size={24} fill="currentColor" />
                     </button>
                   </div>
 
                   {/* Hidden Player for Audio Sync */}
-                  <div className="opacity-0 pointer-events-none absolute inset-0">
-                    <YouTube
-                      videoId={room.musicUrl ? extractVideoId(room.musicUrl) || room.videoId : room.videoId}
-                      opts={{
-                        width: '100%',
-                        height: '100%',
-                        playerVars: { autoplay: 0, controls: 0, modestbranding: 1, rel: 0 },
-                      }}
-                      onReady={onPlayerReady}
-                      onStateChange={onPlayerStateChange}
-                      onEnd={onPlayerEnd}
-                    />
+                  <div className="absolute top-0 left-0 w-1 h-1 opacity-0 pointer-events-none overflow-hidden">
+                    {room.videoId && (
+                      <YouTube
+                        videoId={room.videoId}
+                        opts={{
+                          width: '100%',
+                          height: '100%',
+                          playerVars: { autoplay: 1, controls: 0, modestbranding: 1, rel: 0 },
+                        }}
+                        onReady={(e) => {
+                          onPlayerReady(e);
+                          if (room.isPlaying) e.target.playVideo();
+                        }}
+                        onStateChange={onPlayerStateChange}
+                        onEnd={onPlayerEnd}
+                        onError={(e) => console.error("YouTube Player Error:", e.data)}
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -1282,33 +1399,12 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                 </div>
               </div>
             )}
-            <FloatingEmojis roomId={roomId} />
           </div>
+          <FloatingEmojis roomId={roomId} />
 
-          {/* Progress Bar & Emoji Bar */}
+          {/* Emoji Bar */}
           <div className="mt-6 bg-zinc-900/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50 space-y-4">
-            <div className="flex items-center gap-4">
-              <span className="text-xs font-mono text-zinc-500 w-10 text-right">
-                {Math.floor(localProgress / 60)}:{(Math.floor(localProgress % 60)).toString().padStart(2, '0')}
-              </span>
-              <input 
-                type="range" 
-                min={0} 
-                max={duration || 100} 
-                value={localProgress} 
-                onChange={handleSeek}
-                onMouseDown={() => setIsDragging(true)}
-                onMouseUp={() => { setIsDragging(false); handleSeekCommit(); }}
-                onTouchStart={() => setIsDragging(true)}
-                onTouchEnd={() => { setIsDragging(false); handleSeekCommit(); }}
-                className="flex-1 h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
-              />
-              <span className="text-xs font-mono text-zinc-500 w-10">
-                {Math.floor(duration / 60)}:{(Math.floor(duration % 60)).toString().padStart(2, '0')}
-              </span>
-            </div>
-
-            <div className="flex justify-center gap-2 sm:gap-4 pt-2 border-t border-zinc-800/50">
+            <div className="flex justify-center gap-2 sm:gap-4">
               {EMOJIS.map(emoji => (
                 <button
                   key={emoji}
@@ -1422,15 +1518,27 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             {activeTab === 'chat' ? (
               messages.map((msg) => (
                 <div key={msg.id} className={cn(
-                  "flex flex-col max-w-[85%]",
-                  msg.senderId === auth.currentUser?.uid ? "ml-auto items-end" : "items-start"
+                  "flex max-w-[85%] gap-2",
+                  msg.senderId === auth.currentUser?.uid ? "ml-auto flex-row-reverse" : "flex-row"
                 )}>
-                  <span className="text-[10px] text-zinc-500 mb-1 px-1">{msg.senderName}</span>
+                  {msg.photoURL ? (
+                    <img src={msg.photoURL} alt="" className="w-6 h-6 rounded-full bg-zinc-800 shrink-0 mt-4" />
+                  ) : (
+                    <div className="w-6 h-6 rounded-full bg-zinc-800 shrink-0 mt-4 flex items-center justify-center text-[10px] font-bold">
+                      {msg.senderName[0]}
+                    </div>
+                  )}
                   <div className={cn(
-                    "px-4 py-2 rounded-2xl text-sm",
-                    msg.senderId === auth.currentUser?.uid ? "bg-zinc-100 text-black rounded-tr-none" : "bg-zinc-900 text-zinc-200 rounded-tl-none"
+                    "flex flex-col",
+                    msg.senderId === auth.currentUser?.uid ? "items-end" : "items-start"
                   )}>
-                    {msg.text}
+                    <span className="text-[10px] text-zinc-500 mb-1 px-1">{msg.senderName}</span>
+                    <div className={cn(
+                      "px-4 py-2 rounded-2xl text-sm",
+                      msg.senderId === auth.currentUser?.uid ? "bg-zinc-100 text-black rounded-tr-none" : "bg-zinc-900 text-zinc-200 rounded-tl-none"
+                    )}>
+                      {msg.text}
+                    </div>
                   </div>
                 </div>
               ))

@@ -87,6 +87,8 @@ service cloud.firestore {
              data.mediaType in ['youtube', 'music'] &&
              data.videoId is string &&
              data.musicUrl is string &&
+             (!('title' in data) || data.title is string) &&
+             (!('name' in data) || data.name is string) &&
              data.currentTime is number &&
              data.isPlaying is bool &&
              data.lastUpdated is timestamp &&
@@ -98,6 +100,7 @@ service cloud.firestore {
              data.text is string && data.text.size() > 0 && data.text.size() < 1000 &&
              data.senderId == request.auth.uid &&
              data.senderName is string &&
+             (!('photoURL' in data) || data.photoURL is string) &&
              data.timestamp is timestamp;
     }
 
@@ -106,6 +109,7 @@ service cloud.firestore {
              data.type in ['join', 'leave', 'pause', 'play', 'seek', 'change_video'] &&
              data.userId == request.auth.uid &&
              data.userName is string &&
+             (!('details' in data) || data.details is string) &&
              data.timestamp is timestamp;
     }
 
@@ -113,6 +117,7 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'displayName', 'lastSeen']) &&
              data.uid == request.auth.uid &&
              data.displayName is string &&
+             (!('photoURL' in data) || data.photoURL is string) &&
              data.lastSeen is timestamp;
     }
 
@@ -123,6 +128,13 @@ service cloud.firestore {
              data.title is string &&
              data.addedBy == request.auth.uid &&
              data.addedByName is string &&
+             data.timestamp is timestamp;
+    }
+
+    function isValidReaction(data) {
+      return data.keys().hasAll(['emoji', 'userId', 'timestamp']) &&
+             data.emoji is string && data.emoji.size() > 0 && data.emoji.size() < 10 &&
+             data.userId == request.auth.uid &&
              data.timestamp is timestamp;
     }
 
@@ -161,6 +173,11 @@ service cloud.firestore {
         allow read: if isAuthenticated();
         allow create: if isAuthenticated() && isValidQueueItem(request.resource.data);
         allow delete: if isAuthenticated();
+      }
+
+      match /reactions/{reactionId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidReaction(request.resource.data);
       }
     }
   }
