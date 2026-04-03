@@ -50,7 +50,8 @@ import {
   SkipBack,
   SkipForward,
   Repeat,
-  Shuffle
+  Shuffle,
+  Headphones
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -1936,6 +1937,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                       />
                     )}
                   </div>
+                  <button
+                    onClick={() => updateRoomState({ mediaType: 'youtube' })}
+                    className="mt-4 flex items-center justify-center gap-2 text-zinc-500 hover:text-white transition-colors w-full"
+                  >
+                    <YoutubeIcon size={16} />
+                    <span>Back to Video</span>
+                  </button>
                 </div>
 
                 {/* Visualizer Bars */}
@@ -1956,6 +1964,15 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
               </div>
             )}
           </div>
+          {room.mediaType === 'youtube' && (
+            <button
+              onClick={() => updateRoomState({ mediaType: 'music' })}
+              className="mt-4 flex items-center justify-center gap-2 text-zinc-500 hover:text-white transition-colors w-full"
+            >
+              <Headphones size={16} />
+              <span>Background Play</span>
+            </button>
+          )}
           <FloatingEmojis roomId={roomId} />
 
           {/* Emoji Bar */}
