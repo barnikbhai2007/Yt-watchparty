@@ -15,8 +15,10 @@ app.use(express.json());
 
 // Proxy API to bypass CORS
 app.get('/api/proxy/search', async (req, res) => {
-  const { q } = req.query;
-  const searchUrl = `https://yt-search-nine.vercel.app/api/search?q=${encodeURIComponent(q as string)}`;
+  const { q, type } = req.query;
+  const searchUrl = type === 'music'
+    ? `https://yt-search-nine.vercel.app/music?q=${encodeURIComponent(q as string)}`
+    : `https://yt-search-nine.vercel.app/search?q=${encodeURIComponent(q as string)}`;
 
   try {
     const response = await axios.get(searchUrl);

@@ -411,7 +411,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
     setSearchResults([]);
 
     try {
-      const searchUrl = `/api/proxy/search?q=${encodeURIComponent(videoUrl)}`;
+      const searchUrl = `/api/proxy/search?q=${encodeURIComponent(videoUrl)}&type=${lobbyType}`;
       
       const response = await fetch(searchUrl);
       if (!response.ok) throw new Error("Search API request failed");
@@ -438,7 +438,8 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
         updatedBy: auth.currentUser?.uid,
         name: lobbyType === 'youtube' ? "YouTube Party" : "Music Jam",
         title: result.title,
-        mediaType: lobbyType
+        mediaType: lobbyType,
+        repeat: false
       });
       onJoinRoom(newRoomId, lobbyType);
     } catch (error) {
@@ -479,7 +480,8 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
         lastUpdated: serverTimestamp(),
         updatedBy: auth.currentUser?.uid,
         name: lobbyType === 'youtube' ? "YouTube Party" : "Music Jam",
-        mediaType: lobbyType
+        mediaType: lobbyType,
+        repeat: false
       });
       onJoinRoom(newRoomId, lobbyType);
     } catch (error) {
@@ -896,7 +898,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         const response = await fetch(`/api/proxy/oembed?url=https://www.youtube.com/watch?v=${mediaId}`);
         if (response.ok) {
           const data = await response.json();
-          title = data.title;
+          title = data.title || 'Unknown Title';
         }
       } catch (e) {
         console.error("Failed to fetch title", e);
@@ -939,7 +941,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       await addDoc(historyRef, {
         mediaId: room.videoId,
         mediaType: room.mediaType,
-        title: room.title,
+        title: room.title || "Unknown Title",
         timestamp: serverTimestamp()
       });
     }
@@ -957,7 +959,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         mediaType: nextItem.mediaType,
         currentTime: 0,
         isPlaying: true,
-        title: nextItem.title,
+        title: nextItem.title || "Unknown Title",
         videoId: nextItem.mediaId
       };
       if (nextItem.mediaType === 'music') {
@@ -1013,10 +1015,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     if (isUpdatingRef.current) return;
     const roomRef = doc(db, 'rooms', roomId);
     try {
+      const uid = auth.currentUser?.uid;
+      if (!uid) return;
+
       await updateDoc(roomRef, {
         ...updates,
         lastUpdated: serverTimestamp(),
-        updatedBy: auth.currentUser?.uid
+        updatedBy: uid
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `rooms/${roomId}`);
@@ -1102,7 +1107,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
     try {
       // Using the user's custom yt-search backend provided via proxy to bypass CORS
-      const searchUrl = `/api/proxy/search?q=${encodeURIComponent(searchInput)}`;
+      const searchUrl = `/api/proxy/search?q=${encodeURIComponent(searchInput)}&type=${room?.mediaType || 'youtube'}`;
 
       const response = await fetch(searchUrl);
       
