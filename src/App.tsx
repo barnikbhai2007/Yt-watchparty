@@ -750,6 +750,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [toasts, setToasts] = useState<{id: string, message: string}[]>([]);
   
   const isUpdatingRef = useRef(false);
+  const hasSyncedRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const searchContainerRef = useRef<HTMLDivElement>(null);
@@ -843,6 +844,10 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     };
   }, [roomId]);
 
+  useEffect(() => {
+    hasSyncedRef.current = false;
+  }, [roomId]);
+
   // --- Subscriptions ---
   useEffect(() => {
     const roomRef = doc(db, 'rooms', roomId);
@@ -880,10 +885,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             }
 
             // Only sync if drift is significant (> 2s) or if it's the first sync after refresh
-            if (Math.abs(localTime - targetTime) > 2 || data.updatedBy !== auth.currentUser?.uid) {
-              if (Math.abs(localTime - targetTime) > 2) {
-                player.seekTo(targetTime, true);
-              }
+            const isFirstSync = !hasSyncedRef.current;
+            const isOthersUpdate = data.updatedBy !== auth.currentUser?.uid;
+            const isSignificantDrift = Math.abs(localTime - targetTime) > 2;
+
+            if (isFirstSync || (isOthersUpdate && isSignificantDrift)) {
+              player.seekTo(targetTime, true);
+              hasSyncedRef.current = true;
             }
           } catch (error) {
             console.error("Player sync error:", error);
