@@ -1063,15 +1063,38 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       if (room.isShuffled) {
         // Pick random item from queue
         const allDocs = await getDocs(queueRef);
-        if (allDocs.empty) return;
+        if (allDocs.empty) {
+          // If repeat all is on, we might have just added the song back
+          // but getDocs might not see it yet due to latency.
+          // If we have no other options, we can't play next.
+          if (room.repeatMode === 'all' && room.videoId) {
+            // Fallback: play the same song again if it's the only one
+            await updateRoomState({ currentTime: 0, isPlaying: true });
+            if (player) {
+              player.seekTo(0);
+              player.playVideo();
+            }
+          }
+          return;
+        }
         const randomIndex = Math.floor(Math.random() * allDocs.docs.length);
-        snapshot = { docs: [allDocs.docs[randomIndex]], empty: false };
+        const selectedDoc = allDocs.docs[randomIndex];
+        snapshot = { docs: [selectedDoc], empty: false };
       } else {
         const q = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
         snapshot = await getDocs(q);
       }
 
-      if (snapshot.empty) return;
+      if (snapshot.empty) {
+        if (room.repeatMode === 'all' && room.videoId) {
+          await updateRoomState({ currentTime: 0, isPlaying: true });
+          if (player) {
+            player.seekTo(0);
+            player.playVideo();
+          }
+        }
+        return;
+      }
       
       const nextDoc = snapshot.docs[0];
       const nextItem = { id: nextDoc.id, ...nextDoc.data() } as QueueItem;
@@ -1302,7 +1325,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   const onPlayerEnd = () => {
-    playNext();
+    if (participants[0]?.uid === auth.currentUser?.uid) {
+      playNext();
+    }
   };
 
   const handleCopyLink = () => {
