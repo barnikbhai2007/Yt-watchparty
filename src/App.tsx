@@ -1453,30 +1453,30 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   return (
     <div className="min-h-screen bg-zinc-950 text-white flex flex-col h-screen overflow-hidden">
       {/* Header */}
-      <header className="p-3 sm:p-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-950/80 backdrop-blur-md z-20 shrink-0">
+      <header className="p-2 sm:p-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-950/80 backdrop-blur-md z-20 shrink-0">
         <div className="flex items-center gap-2 sm:gap-4">
-          <button onClick={onLeave} className="p-2 hover:bg-zinc-900 rounded-lg transition-colors">
-            <LogOut size={20} className="rotate-180" />
+          <button onClick={onLeave} className="p-1.5 sm:p-2 hover:bg-zinc-900 rounded-lg transition-colors">
+            <LogOut size={18} className="rotate-180 sm:w-5 sm:h-5" />
           </button>
-          <div>
-            <h2 className="font-bold text-sm sm:text-lg leading-tight truncate max-w-[120px] sm:max-w-none">{room.name || "Watch Party"}</h2>
-            <p className="text-[10px] sm:text-xs text-zinc-500 font-mono uppercase tracking-wider">{roomId}</p>
+          <div className="min-w-0">
+            <h2 className="font-bold text-xs sm:text-lg leading-tight truncate max-w-[100px] sm:max-w-none">{room.name || "Watch Party"}</h2>
+            <p className="text-[8px] sm:text-xs text-zinc-500 font-mono uppercase tracking-wider truncate">{roomId}</p>
           </div>
         </div>
         
-        <div className="flex items-center gap-2 sm:gap-3">
-          <UserProfile />
+        <div className="flex items-center gap-1.5 sm:gap-3">
+          <UserProfile className="scale-90 sm:scale-100 origin-right" />
           <button 
             onClick={handleCopyLink}
-            className="flex items-center gap-2 px-3 py-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-xs sm:text-sm font-medium transition-all"
+            className="flex items-center gap-1.5 px-2 py-1.5 sm:px-3 sm:py-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-[10px] sm:text-sm font-medium transition-all"
           >
-            {copied ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
+            {copied ? <Check size={12} className="text-green-500 sm:w-3.5 sm:h-3.5" /> : <Copy size={12} className="sm:w-3.5 sm:h-3.5" />}
             <span className="hidden sm:inline">{copied ? "Copied!" : "Copy ID"}</span>
           </button>
           
           <button 
             onClick={() => setShowSidebar(!showSidebar)}
-            className="lg:hidden p-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-zinc-400"
+            className="hidden lg:flex p-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-zinc-400"
           >
             <MessageSquare size={20} />
           </button>
@@ -1803,13 +1803,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           <FloatingEmojis roomId={roomId} />
 
           {/* Emoji Bar */}
-          <div className="mt-6 bg-zinc-900/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50 space-y-4">
-            <div className="flex justify-center gap-2 sm:gap-4">
+          <div className="mt-4 sm:mt-6 bg-zinc-900/50 p-3 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50">
+            <div className="flex justify-center gap-1.5 sm:gap-4 overflow-x-auto no-scrollbar">
               {EMOJIS.map(emoji => (
                 <button
                   key={emoji}
                   onClick={() => sendEmoji(emoji)}
-                  className="text-2xl sm:text-3xl hover:scale-125 transition-transform active:scale-90"
+                  className="text-xl sm:text-3xl hover:scale-125 transition-transform active:scale-90 shrink-0 p-1"
                 >
                   {emoji}
                 </button>
@@ -1871,11 +1871,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
         {/* Sidebar (Chat & Activity) */}
         <aside className={cn(
-          "fixed inset-y-0 right-0 w-full sm:w-80 bg-zinc-950 border-l border-zinc-900 z-30 lg:relative lg:translate-x-0 transition-transform duration-300 flex flex-col",
+          "fixed inset-y-0 right-0 w-full sm:w-80 bg-zinc-950 border-l border-zinc-900 z-30 lg:relative lg:translate-x-0 transition-transform duration-300 flex flex-col pb-16 lg:pb-0",
           showSidebar ? "translate-x-0" : "translate-x-full"
         )}>
           <div className="p-4 border-b border-zinc-900 flex items-center justify-between lg:hidden">
-            <h3 className="font-bold">Room Activity</h3>
+            <h3 className="font-bold text-sm uppercase tracking-widest text-zinc-500">
+              {activeTab === 'chat' ? 'Room Chat' : activeTab === 'queue' ? 'Play Queue' : 'Activity Logs'}
+            </h3>
             <button onClick={() => setShowSidebar(false)} className="p-2 hover:bg-zinc-900 rounded-lg">
               <X size={20} />
             </button>
@@ -2038,6 +2040,59 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           )}
         </aside>
       </main>
+
+      {/* Mobile Navigation Bar */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-zinc-950/90 backdrop-blur-xl border-t border-zinc-900 px-6 py-3 flex items-center justify-between z-40">
+        <button 
+          onClick={() => setShowSidebar(false)}
+          className={cn(
+            "flex flex-col items-center gap-1 transition-all",
+            !showSidebar ? "text-blue-500" : "text-zinc-500"
+          )}
+        >
+          <Play size={20} fill={!showSidebar ? "currentColor" : "none"} />
+          <span className="text-[10px] font-bold">PLAYER</span>
+        </button>
+        <button 
+          onClick={() => {
+            setActiveTab('chat');
+            setShowSidebar(true);
+          }}
+          className={cn(
+            "flex flex-col items-center gap-1 transition-all",
+            (showSidebar && activeTab === 'chat') ? "text-blue-500" : "text-zinc-500"
+          )}
+        >
+          <MessageSquare size={20} fill={(showSidebar && activeTab === 'chat') ? "currentColor" : "none"} />
+          <span className="text-[10px] font-bold">CHAT</span>
+        </button>
+        <button 
+          onClick={() => {
+            setActiveTab('queue');
+            setShowSidebar(true);
+          }}
+          className={cn(
+            "flex flex-col items-center gap-1 transition-all",
+            (showSidebar && activeTab === 'queue') ? "text-blue-500" : "text-zinc-500"
+          )}
+        >
+          <List size={20} />
+          <span className="text-[10px] font-bold">QUEUE</span>
+        </button>
+        <button 
+          onClick={() => {
+            setActiveTab('activity');
+            setShowSidebar(true);
+          }}
+          className={cn(
+            "flex flex-col items-center gap-1 transition-all",
+            (showSidebar && activeTab === 'activity') ? "text-blue-500" : "text-zinc-500"
+          )}
+        >
+          <ActivityIcon size={20} />
+          <span className="text-[10px] font-bold">LOGS</span>
+        </button>
+      </nav>
     </div>
   );
 };
