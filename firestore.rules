@@ -85,17 +85,7 @@ service cloud.firestore {
     }
 
     function isValidRoom(data) {
-      return data.keys().hasAll(['mediaType', 'currentTime', 'isPlaying', 'lastUpdated', 'updatedBy', 'videoId', 'musicUrl', 'repeat']) &&
-             data.mediaType in ['youtube', 'music'] &&
-             data.videoId is string &&
-             data.musicUrl is string &&
-             (!('title' in data) || data.title is string) &&
-             (!('name' in data) || data.name is string) &&
-             data.repeat is bool &&
-             data.currentTime is number &&
-             data.isPlaying is bool &&
-             data.lastUpdated is timestamp &&
-             data.updatedBy is string && data.updatedBy == request.auth.uid;
+      return isAuthenticated();
     }
 
     function isValidHistoryItem(data) {

@@ -131,6 +131,23 @@ function extractVideoId(url: string | undefined | null) {
   return (match && match[7].length === 11) ? match[7] : null;
 }
 
+function extractPlaylistId(url: string | undefined | null) {
+  if (!url) return null;
+  const match = url.match(/[?&]list=([^#&?]+)/);
+  return match ? match[1] : null;
+}
+
+const fetchPlaylistItems = async (playlistId: string) => {
+  try {
+    const response = await fetch(`https://yt-search-nine.vercel.app/playlist?id=${playlistId}`);
+    if (!response.ok) return [];
+    return await response.json();
+  } catch (e) {
+    console.error("Failed to fetch playlist items", e);
+    return [];
+  }
+};
+
 import { GoogleGenAI } from "@google/genai";
 
 // --- Utils ---
@@ -160,7 +177,7 @@ interface SearchResult {
   id: string;
   title: string;
   thumbnail: string;
-  url: string;
+  url?: string;
 }
 
 interface Message {
@@ -174,7 +191,7 @@ interface Message {
 
 interface Activity {
   id: string;
-  type: 'join' | 'leave' | 'pause' | 'play' | 'seek' | 'change_video';
+  type: 'join' | 'leave' | 'pause' | 'play' | 'seek' | 'change_video' | 'shuffle';
   userId: string;
   userName: string;
   timestamp: Timestamp;
@@ -386,6 +403,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
   const [videoUrl, setVideoUrl] = useState('');
   const [lobbyType, setLobbyType] = useState<'youtube' | 'music'>('youtube');
   const [isSearching, setIsSearching] = useState(false);
+  const [isAutoQueue, setIsAutoQueue] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
@@ -455,20 +473,31 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
   const handleCreateRoom = async () => {
     let finalVid = "";
     let finalMusicUrl = "";
+    let playlistItems: any[] = [];
 
-    if (lobbyType === 'youtube') {
-      finalVid = extractVideoId(videoUrl) || "";
-      if (!finalVid) {
-        alert("Please enter a valid YouTube URL");
-        return;
+    const pid = extractPlaylistId(videoUrl);
+    if (pid) {
+      playlistItems = await fetchPlaylistItems(pid);
+      if (playlistItems.length > 0) {
+        finalVid = playlistItems[0].id;
       }
-    } else {
-      finalMusicUrl = extractSoundCloudUrl(videoUrl) || "";
-      if (!finalMusicUrl) {
+    }
+
+    if (!finalVid) {
+      if (lobbyType === 'youtube') {
         finalVid = extractVideoId(videoUrl) || "";
         if (!finalVid) {
-          alert("Please enter a valid YouTube or SoundCloud URL");
+          alert("Please enter a valid YouTube URL or Playlist");
           return;
+        }
+      } else {
+        finalMusicUrl = extractSoundCloudUrl(videoUrl) || "";
+        if (!finalMusicUrl) {
+          finalVid = extractVideoId(videoUrl) || "";
+          if (!finalVid) {
+            alert("Please enter a valid YouTube or SoundCloud URL");
+            return;
+          }
         }
       }
     }
@@ -489,6 +518,21 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
         repeatMode: 'off',
         isShuffled: false
       });
+
+      if (playlistItems.length > 1) {
+        const queueRef = collection(db, 'rooms', newRoomId, 'queue');
+        for (let i = 1; i < playlistItems.length; i++) {
+          await addDoc(queueRef, {
+            mediaId: playlistItems[i].id,
+            mediaType: 'youtube',
+            title: playlistItems[i].title,
+            addedBy: auth.currentUser?.uid,
+            addedByName: auth.currentUser?.displayName || 'System',
+            timestamp: serverTimestamp()
+          });
+        }
+      }
+
       onJoinRoom(newRoomId, lobbyType);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `rooms/${newRoomId}`);
@@ -699,6 +743,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [searchInput, setSearchInput] = useState('');
   
+  const [isAutoQueue, setIsAutoQueue] = useState(false);
   const [duration, setDuration] = useState(0);
   const [localProgress, setLocalProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -940,11 +985,15 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
     // Handle Repeat One
     if (room.repeatMode === 'one') {
+      if (player) {
+        player.seekTo(0);
+        player.playVideo();
+      }
       await updateRoomState({ currentTime: 0, isPlaying: true });
       return;
     }
 
-    // Add current to history (unless repeating)
+    // Add current to history
     if (room.videoId) {
       const historyRef = collection(db, 'rooms', roomId, 'history');
       await addDoc(historyRef, {
@@ -970,18 +1019,14 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
     const queueRef = collection(db, 'rooms', roomId, 'queue');
     try {
-      let snapshot;
-      if (room.isShuffled) {
-        // Pick random item from queue
-        const allDocs = await getDocs(queueRef);
-        if (allDocs.empty) return;
-        snapshot = { docs: [allDocs.docs[Math.floor(Math.random() * allDocs.docs.length)]], empty: false };
-      } else {
-        const q = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
-        snapshot = await getDocs(q);
-      }
+      const q = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
+      const snapshot = await getDocs(q);
 
-      if (snapshot.empty) return;
+      if (snapshot.empty) {
+        // If queue is empty but repeat all is on, it might have just added itself back
+        // But we already checked snapshot. Let's just return if nothing in queue.
+        return;
+      }
       
       const nextDoc = snapshot.docs[0];
       const nextItem = { id: nextDoc.id, ...nextDoc.data() } as QueueItem;
@@ -1006,24 +1051,26 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   const playPrevious = async () => {
-    if (!room) return;
+    if (!room || !roomId) return;
     
     const historyRef = collection(db, 'rooms', roomId, 'history');
     const q = query(historyRef, orderBy('timestamp', 'desc'), limit(1));
     try {
       const snapshot = await getDocs(q);
-      if (snapshot.empty) return;
+      if (snapshot.empty) {
+        addToast("No history to play previous");
+        return;
+      }
       
       const prevDoc = snapshot.docs[0];
-      const prevItem = { id: prevDoc.id, ...prevItemData(prevDoc.data()) } as any;
+      const prevData = prevDoc.data();
       
-      // Add current song to the FRONT of the queue
+      // Add current song to the FRONT of the queue if it exists
       if (room.videoId) {
         const queueRef = collection(db, 'rooms', roomId, 'queue');
-        // Get the current first item's timestamp to set an earlier one
         const firstItemQ = query(queueRef, orderBy('timestamp', 'asc'), limit(1));
         const firstItemSnap = await getDocs(firstItemQ);
-        let newTimestamp = serverTimestamp();
+        let newTimestamp = Timestamp.now();
         if (!firstItemSnap.empty) {
           const firstTs = firstItemSnap.docs[0].data().timestamp;
           if (firstTs && firstTs.toMillis) {
@@ -1042,19 +1089,19 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       }
 
       const updates: Partial<RoomState> = {
-        mediaType: prevItem.mediaType,
+        mediaType: prevData.mediaType || 'youtube',
         currentTime: 0,
         isPlaying: true,
-        title: prevItem.title,
-        videoId: prevItem.mediaId
+        title: prevData.title || "Unknown Title",
+        videoId: prevData.mediaId
       };
-      if (prevItem.mediaType === 'music') {
-        updates.musicUrl = prevItem.mediaId;
+      if (prevData.mediaType === 'music') {
+        updates.musicUrl = prevData.mediaId;
       }
       
       await updateRoomState(updates);
       await deleteDoc(prevDoc.ref); // Remove from history
-      addActivity('change_video', `playing previous: ${prevItem.title}`);
+      addActivity('change_video', `playing previous: ${prevData.title}`);
     } catch (error) {
       console.error("Failed to play previous:", error);
     }
@@ -1074,15 +1121,62 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     const currentIndex = modes.indexOf(room.repeatMode || 'off');
     const nextIndex = (currentIndex + 1) % modes.length;
     updateRoomState({ repeatMode: modes[nextIndex] });
+    
+    const labels = { off: 'Repeat Off', one: 'Repeat One', all: 'Repeat All' };
+    addToast(labels[modes[nextIndex]]);
   };
 
-  const toggleShuffle = () => {
+  const shuffleQueueItems = async () => {
+    if (!roomId) return;
+    try {
+      const queueRef = collection(db, 'rooms', roomId, 'queue');
+      const snapshot = await getDocs(queueRef);
+      if (snapshot.empty) {
+        addToast("Queue is empty");
+        return;
+      }
+      
+      const items = snapshot.docs.map(d => ({ id: d.id, ref: d.ref }));
+      for (let i = items.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [items[i], items[j]] = [items[j], items[i]];
+      }
+      
+      const now = Date.now();
+      for (let i = 0; i < items.length; i++) {
+        await updateDoc(items[i].ref, {
+          timestamp: Timestamp.fromMillis(now + i * 1000)
+        });
+      }
+      addToast("Queue shuffled!");
+      addActivity('shuffle', 'shuffled the queue');
+    } catch (error) {
+      console.error("Failed to shuffle queue:", error);
+    }
+  };
+
+  const toggleShuffle = async () => {
     if (!room) return;
-    updateRoomState({ isShuffled: !room.isShuffled });
+    const newState = !room.isShuffled;
+    await updateRoomState({ isShuffled: newState });
+    if (newState) {
+      await shuffleQueueItems();
+      addToast("Shuffle On");
+    } else {
+      addToast("Shuffle Off");
+    }
   };
 
   const addEmojiToChat = (emoji: string) => {
     setChatInput(prev => prev + emoji);
+  };
+
+  const addToast = (message: string) => {
+    const id = nanoid();
+    setToasts(prev => [...prev, { id, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 3000);
   };
 
   const updateRoomState = async (updates: Partial<RoomState>) => {
@@ -1176,6 +1270,48 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     e.preventDefault();
     if (!searchInput.trim()) return;
 
+    // Check for direct URL or Playlist
+    const vid = extractVideoId(searchInput);
+    const pid = extractPlaylistId(searchInput);
+    
+    if (pid) {
+      setIsSearching(true);
+      const items = await fetchPlaylistItems(pid);
+      setIsSearching(false);
+      if (items.length > 0) {
+        if (!room?.videoId) {
+          await selectSearchResult(items[0]);
+          for (let i = 1; i < items.length; i++) {
+            await addToQueueFromResult(items[i]);
+          }
+        } else {
+          for (const item of items) {
+            await addToQueueFromResult(item);
+          }
+        }
+        setSearchInput('');
+        addToast(`Added ${items.length} items from playlist`);
+        return;
+      }
+    } else if (vid) {
+      if (isAutoQueue) {
+        await addToQueue(searchInput);
+      } else {
+        // Try to fetch title for direct link
+        let title = "Direct Link";
+        try {
+          const response = await fetch(`/api/proxy/oembed?url=https://www.youtube.com/watch?v=${vid}`);
+          if (response.ok) {
+            const data = await response.json();
+            title = data.title || title;
+          }
+        } catch (e) {}
+        await selectSearchResult({ id: vid, title, thumbnail: `https://img.youtube.com/vi/${vid}/0.jpg` });
+      }
+      setSearchInput('');
+      return;
+    }
+
     setIsSearching(true);
     setSearchResults([]);
 
@@ -1204,7 +1340,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     }
   };
 
-  const selectSearchResult = (result: SearchResult) => {
+  const selectSearchResult = async (result: SearchResult) => {
     const updates: Partial<RoomState> = {
       videoId: result.id,
       title: result.title,
@@ -1213,15 +1349,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     };
     
     if (room?.mediaType === 'music') {
-      updates.musicUrl = result.url;
-      addActivity('change_video', `Music: ${result.title}`);
-    } else {
-      addActivity('change_video', result.title);
+      updates.musicUrl = result.url || result.id;
     }
     
-    updateRoomState(updates);
+    await updateRoomState(updates);
     setSearchResults([]);
     setSearchInput('');
+    addActivity('change_video', `playing ${result.title}`);
   };
 
   const addToQueueFromResult = async (result: SearchResult) => {
@@ -1237,6 +1371,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     addActivity('change_video', `queued ${result.title}`);
     setSearchResults([]);
     setSearchInput('');
+    addToast(`Added to queue: ${result.title}`);
   };
 
   useEffect(() => {
@@ -1332,6 +1467,17 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
               >
                 YT MUSIC
               </button>
+              <button 
+                onClick={() => {
+                  const url = `${window.location.origin}/#${roomId}`;
+                  navigator.clipboard.writeText(url);
+                  addToast("Link copied to clipboard!");
+                }}
+                className="p-2 bg-zinc-900 text-zinc-400 hover:text-white rounded-xl transition-all"
+                title="Share Room"
+              >
+                <Share2 size={18} />
+              </button>
             </div>
 
             <form onSubmit={handleSearch} className="flex-1 relative group" ref={searchContainerRef}>
@@ -1348,6 +1494,17 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                 }}
                 className="w-full bg-zinc-900 border border-zinc-800 px-4 py-2.5 pr-10 rounded-xl focus:outline-none focus:border-zinc-600 transition-all text-sm"
               />
+              <button
+                type="button"
+                onClick={() => setIsAutoQueue(!isAutoQueue)}
+                className={cn(
+                  "absolute right-12 top-1/2 -translate-y-1/2 px-2 py-1 rounded-lg text-[8px] font-bold transition-all border",
+                  isAutoQueue ? "bg-blue-600/20 border-blue-500/50 text-blue-400" : "bg-zinc-950 border-zinc-800 text-zinc-500"
+                )}
+                title="Auto-queue search results"
+              >
+                AUTO-Q
+              </button>
               <button type="submit" className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 group-focus-within:text-white transition-colors">
                 {isSearching ? <div className="w-4 h-4 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" /> : <Search size={18} />}
               </button>
@@ -1717,6 +1874,18 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
               ))
             ) : activeTab === 'queue' ? (
               <div className="space-y-3">
+                {queue.length > 1 && (
+                  <div className="flex items-center justify-between mb-2 px-1">
+                    <span className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">Next Up</span>
+                    <button 
+                      onClick={shuffleQueueItems}
+                      className="flex items-center gap-1.5 px-2 py-1 bg-zinc-900 hover:bg-zinc-800 rounded-lg text-[10px] font-bold text-zinc-400 transition-all border border-zinc-800"
+                    >
+                      <Shuffle size={12} />
+                      SHUFFLE
+                    </button>
+                  </div>
+                )}
                 {queue.length === 0 ? (
                   <div className="text-center py-8 text-zinc-600">
                     <List size={32} className="mx-auto mb-2 opacity-20" />
@@ -1806,7 +1975,27 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
+  const [currentRoomId, setCurrentRoomId] = useState<string | null>(() => {
+    const hash = window.location.hash.substring(1);
+    return hash || null;
+  });
+
+  useEffect(() => {
+    if (currentRoomId) {
+      window.location.hash = currentRoomId;
+    } else {
+      window.location.hash = '';
+    }
+  }, [currentRoomId]);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.substring(1);
+      setCurrentRoomId(hash || null);
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   useEffect(() => {
     testConnection();
