@@ -760,32 +760,33 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   
   const isUpdatingRef = useRef(false);
   const hasSyncedRef = useRef(false);
-  const playPromiseRef = useRef<Promise<void> | null>(null);
+  const audioCommandQueueRef = useRef<Promise<any>>(Promise.resolve());
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  const safeAudioPlay = async () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    try {
-      if (playPromiseRef.current) await playPromiseRef.current;
-      if (audio.paused) {
-        playPromiseRef.current = audio.play();
-        await playPromiseRef.current;
-        playPromiseRef.current = null;
-      }
-    } catch (e: any) {
-      if (e.name !== 'AbortError') console.warn("Audio play error:", e.message);
-      playPromiseRef.current = null;
-    }
+  const runAudioCommand = (command: () => Promise<any>) => {
+    audioCommandQueueRef.current = audioCommandQueueRef.current
+      .then(command)
+      .catch(() => {});
   };
 
-  const safeAudioPause = async () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    try {
-      if (playPromiseRef.current) await playPromiseRef.current;
+  const safeAudioPlay = () => {
+    runAudioCommand(async () => {
+      const audio = audioRef.current;
+      if (!audio || !audio.src || !audio.paused) return;
+      try {
+        await audio.play();
+      } catch (e: any) {
+        if (e.name !== 'AbortError') console.warn("Audio play error:", e.message);
+      }
+    });
+  };
+
+  const safeAudioPause = () => {
+    runAudioCommand(async () => {
+      const audio = audioRef.current;
+      if (!audio || audio.paused) return;
       audio.pause();
-    } catch (e) {}
+    });
   };
 
   const searchContainerRef = useRef<HTMLDivElement>(null);
@@ -953,14 +954,6 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           }
         } else if (data.mediaType === 'music' && audioRef.current) {
           try {
-            const isPlayerPlaying = !audioRef.current.paused;
-            
-            if (data.isPlaying && !isPlayerPlaying) {
-              safeAudioPlay();
-            } else if (!data.isPlaying && isPlayerPlaying) {
-              safeAudioPause();
-            }
-
             const localTime = audioRef.current.currentTime || 0;
             let targetTime = data.currentTime;
 
@@ -1558,13 +1551,16 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       const fetchStream = async () => {
         const qualities = ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"];
         const audio = audioRef.current;
-        
+        if (!audio) return;
+
         // Stop current playback cleanly first
-        if (audio) {
-          await safeAudioPause();
-          audio.src = "";
-          audio.load();
-        }
+        safeAudioPause();
+        runAudioCommand(async () => {
+          if (audio) {
+            audio.removeAttribute('src');
+            audio.load();
+          }
+        });
 
         for (const quality of qualities) {
           try {
@@ -1580,32 +1576,39 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             if (tidalUrl) {
               const proxyUrl = `/api/tidal/stream?url=${encodeURIComponent(tidalUrl)}`;
               
-              if (audio) {
+              runAudioCommand(async () => {
+                if (!audio) return;
                 audio.src = proxyUrl;
                 audio.load();
 
                 // Wait for canplay event before calling play()
-                await new Promise((resolve, reject) => {
+                await new Promise((resolve) => {
                   const onCanPlay = () => {
                     audio.removeEventListener('canplay', onCanPlay);
                     resolve(null);
                   };
                   const onError = (e: any) => {
                     audio.removeEventListener('error', onError);
-                    reject(e);
+                    console.warn("Audio load error:", e);
+                    resolve(null); // Resolve anyway to not block the queue indefinitely
                   };
                   audio.addEventListener('canplay', onCanPlay);
                   audio.addEventListener('error', onError);
                   setTimeout(() => {
                     audio.removeEventListener('canplay', onCanPlay);
+                    audio.removeEventListener('error', onError);
                     resolve(null);
                   }, 10000);
                 });
 
                 if (room?.isPlaying) {
-                  await safeAudioPlay();
+                  try {
+                    await audio.play();
+                  } catch (e: any) {
+                    if (e.name !== 'AbortError') console.warn("Audio play error:", e.message);
+                  }
                 }
-              }
+              });
               
               setMusicStreamUrl(proxyUrl);
               addToast(`Playing in ${quality.replace("_", " ")}`);
