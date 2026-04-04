@@ -444,10 +444,6 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
     setSearchResults([]);
 
     try {
-
-      const MUSIC_API = "https://hifi-api-production.up.railway.app";
-
-      
       const searchUrl = lobbyType === 'music'
         ? `/api/tidal/search/?s=${encodeURIComponent(videoUrl)}`
         : `https://yt-search-nine.vercel.app/search?q=${encodeURIComponent(videoUrl)}`;
@@ -1052,6 +1048,16 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       unsubQueue();
     };
   }, [roomId, player, onLeave]);
+
+  // Auto-scroll lyrics effect
+  useEffect(() => {
+    if (showLyrics) {
+      const activeLine = document.getElementById('active-lyric');
+      if (activeLine) {
+        activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [localProgress, showLyrics]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1738,6 +1744,17 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       if (response.ok) {
         const data = await response.json();
         console.log("Lyrics response:", data);
+        
+        // Handle synced lyrics if available
+        if (data.lines || data.data?.lines) {
+          const lines = data.lines || data.data.lines;
+          setLyrics(lines.map((l: any) => ({
+            text: l.words || l.line || l.text,
+            time: (l.startTimeMs || l.time || 0) / 1000
+          })));
+          return;
+        }
+
         const lyricsData = data.lyrics || data.data?.lyrics || data.text || null;
         if (typeof lyricsData === 'string') {
           setLyrics(lyricsData);
@@ -1906,13 +1923,33 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
               </button>
             </div>
             
-            <div className="flex-1 overflow-y-auto no-scrollbar text-center space-y-6 py-12">
-              {lyrics && typeof lyrics === 'string' ? (
-                lyrics.split('\n').map((line: string, i: number) => (
-                  <p key={i} className="text-2xl sm:text-4xl font-bold text-white/80 hover:text-white transition-colors cursor-default">
-                    {line}
-                  </p>
-                ))
+            <div className="flex-1 overflow-y-auto no-scrollbar text-center space-y-6 py-12 px-6">
+              {lyrics ? (
+                Array.isArray(lyrics) ? (
+                  lyrics.map((line: any, i: number) => {
+                    const isActive = room && room.currentTime >= line.time && 
+                                   (!lyrics[i + 1] || room.currentTime < lyrics[i + 1].time);
+                    
+                    return (
+                      <p 
+                        key={i} 
+                        id={isActive ? "active-lyric" : undefined}
+                        className={cn(
+                          "text-2xl sm:text-4xl font-bold transition-all duration-500 cursor-default",
+                          isActive ? "text-white scale-110" : "text-white/30 scale-100 blur-[1px] hover:blur-0 hover:text-white/60"
+                        )}
+                      >
+                        {line.text}
+                      </p>
+                    );
+                  })
+                ) : typeof lyrics === 'string' ? (
+                  lyrics.split('\n').map((line: string, i: number) => (
+                    <p key={i} className="text-2xl sm:text-4xl font-bold text-white/80 hover:text-white transition-colors cursor-default">
+                      {line}
+                    </p>
+                  ))
+                ) : null
               ) : (
                 <p className="text-zinc-500 italic">No lyrics found for this track.</p>
               )}
@@ -2433,21 +2470,6 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           )}
 
           <FloatingEmojis roomId={roomId} />
-
-          {/* Emoji Bar */}
-          <div className="mt-4 sm:mt-6 bg-zinc-900/50 p-3 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50">
-            <div className="flex justify-center gap-1.5 sm:gap-4 overflow-x-auto no-scrollbar">
-              {EMOJIS.map(emoji => (
-                <button
-                  key={emoji}
-                  onClick={() => sendEmoji(emoji)}
-                  className="text-xl sm:text-3xl hover:scale-125 transition-transform active:scale-90 shrink-0 p-1"
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
-          </div>
           
           <div className="mt-6 space-y-4">
             <div className="bg-zinc-900/30 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-zinc-800/50">
@@ -2652,8 +2674,11 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
               {EMOJIS.map(emoji => (
                 <button
                   key={emoji}
-                  onClick={() => addEmojiToChat(emoji)}
-                  className="text-lg hover:scale-125 transition-transform shrink-0"
+                  onClick={() => {
+                    sendEmoji(emoji);
+                    addEmojiToChat(emoji);
+                  }}
+                  className="text-lg hover:scale-125 transition-transform shrink-0 p-1"
                 >
                   {emoji}
                 </button>
