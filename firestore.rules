@@ -93,6 +93,7 @@ service cloud.firestore {
              data.mediaId is string &&
              data.mediaType in ['youtube', 'music'] &&
              (!('title' in data) || data.title is string) &&
+             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || data.thumbnailUrl is string) &&
              data.timestamp is timestamp;
     }
 
@@ -107,7 +108,7 @@ service cloud.firestore {
 
     function isValidActivity(data) {
       return data.keys().hasAll(['type', 'userId', 'userName', 'timestamp']) &&
-             data.type in ['join', 'leave', 'pause', 'play', 'seek', 'change_video'] &&
+             data.type in ['join', 'leave', 'pause', 'play', 'seek', 'change_video', 'shuffle'] &&
              data.userId == request.auth.uid &&
              data.userName is string &&
              (!('details' in data) || data.details is string) &&
@@ -122,13 +123,25 @@ service cloud.firestore {
              data.lastSeen is timestamp;
     }
 
-    function isValidQueueItem(data) {
+    function isValidQueueItemCreate(data) {
       return data.keys().hasAll(['mediaId', 'mediaType', 'title', 'addedBy', 'addedByName', 'timestamp']) &&
              data.mediaId is string &&
              data.mediaType in ['youtube', 'music'] &&
              data.title is string &&
              data.addedBy == request.auth.uid &&
              data.addedByName is string &&
+             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || data.thumbnailUrl is string) &&
+             data.timestamp is timestamp;
+    }
+
+    function isValidQueueItemUpdate(data, resourceData) {
+      return data.keys().hasAll(['mediaId', 'mediaType', 'title', 'addedBy', 'addedByName', 'timestamp']) &&
+             data.mediaId == resourceData.mediaId &&
+             data.mediaType == resourceData.mediaType &&
+             data.title == resourceData.title &&
+             data.addedBy == resourceData.addedBy &&
+             data.addedByName == resourceData.addedByName &&
+             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || data.thumbnailUrl is string) &&
              data.timestamp is timestamp;
     }
 
@@ -172,7 +185,8 @@ service cloud.firestore {
 
       match /queue/{queueItemId} {
         allow read: if isAuthenticated();
-        allow create: if isAuthenticated() && isValidQueueItem(request.resource.data);
+        allow create: if isAuthenticated() && isValidQueueItemCreate(request.resource.data);
+        allow update: if isAuthenticated() && isValidQueueItemUpdate(request.resource.data, resource.data);
         allow delete: if isAuthenticated();
       }
 

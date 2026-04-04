@@ -754,12 +754,39 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [isAutoQueue, setIsAutoQueue] = useState(false);
   const [duration, setDuration] = useState(0);
   const [localProgress, setLocalProgress] = useState(0);
+  const localProgressRef = useRef(0);
   const [isDragging, setIsDragging] = useState(false);
   const [toasts, setToasts] = useState<{id: string, message: string}[]>([]);
   
   const isUpdatingRef = useRef(false);
   const hasSyncedRef = useRef(false);
+  const playPromiseRef = useRef<Promise<void> | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const safeAudioPlay = async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      if (playPromiseRef.current) await playPromiseRef.current;
+      if (audio.paused) {
+        playPromiseRef.current = audio.play();
+        await playPromiseRef.current;
+        playPromiseRef.current = null;
+      }
+    } catch (e: any) {
+      if (e.name !== 'AbortError') console.warn("Audio play error:", e.message);
+      playPromiseRef.current = null;
+    }
+  };
+
+  const safeAudioPause = async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      if (playPromiseRef.current) await playPromiseRef.current;
+      audio.pause();
+    } catch (e) {}
+  };
 
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
@@ -781,12 +808,18 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           if (room.mediaType === 'youtube' && player) {
             const current = player.getCurrentTime();
             const dur = player.getDuration();
-            if (current !== undefined) setLocalProgress(current);
+            if (current !== undefined) {
+              setLocalProgress(current);
+              localProgressRef.current = current;
+            }
             if (dur !== undefined && dur > 0) setDuration(dur);
           } else if (room.mediaType === 'music' && audioRef.current) {
             const current = audioRef.current.currentTime;
             const dur = audioRef.current.duration;
-            if (current !== undefined) setLocalProgress(current);
+            if (current !== undefined) {
+              setLocalProgress(current);
+              localProgressRef.current = current;
+            }
             if (dur !== undefined && dur > 0 && !isNaN(dur)) setDuration(dur);
           }
         } catch (e) {}
@@ -796,18 +829,21 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   }, [room?.isPlaying, room?.mediaType, player, isDragging]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setLocalProgress(parseFloat(e.target.value));
+    const val = parseFloat(e.target.value);
+    setLocalProgress(val);
+    localProgressRef.current = val;
   };
 
   const handleSeekCommit = async () => {
+    const targetTime = localProgressRef.current;
     if (room?.mediaType === 'youtube' && player) {
-      player.seekTo(localProgress, true);
-      await updateRoomState({ currentTime: localProgress });
-      addActivity('seek', `to ${Math.floor(localProgress)}s`);
+      player.seekTo(targetTime, true);
+      await updateRoomState({ currentTime: targetTime });
+      addActivity('seek', `to ${Math.floor(targetTime)}s`);
     } else if (room?.mediaType === 'music' && audioRef.current) {
-      audioRef.current.currentTime = localProgress;
-      await updateRoomState({ currentTime: localProgress });
-      addActivity('seek', `to ${Math.floor(localProgress)}s`);
+      audioRef.current.currentTime = targetTime;
+      await updateRoomState({ currentTime: targetTime });
+      addActivity('seek', `to ${Math.floor(targetTime)}s`);
     }
   };
 
@@ -920,9 +956,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             const isPlayerPlaying = !audioRef.current.paused;
             
             if (data.isPlaying && !isPlayerPlaying) {
-              audioRef.current.play().catch(e => console.error("Audio play error:", e));
+              safeAudioPlay();
             } else if (!data.isPlaying && isPlayerPlaying) {
-              audioRef.current.pause();
+              safeAudioPause();
             }
 
             const localTime = audioRef.current.currentTime || 0;
@@ -1398,8 +1434,8 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!searchInput.trim()) return;
 
     // Check for direct URL or Playlist (only for YouTube)
@@ -1464,7 +1500,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       const data = await response.json();
       const results = room?.mediaType === 'music'
         ? data.data.items.map((track: any) => ({
-            id: track.id,
+            id: String(track.id),
             title: `${track.title} - ${track.artist.name}`,
             thumbnail: track.album?.cover ? `https://resources.tidal.com/images/${track.album.cover.replace(/-/g, "/")}/320x320.jpg` : ''
           }))
@@ -1520,16 +1556,67 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   useEffect(() => {
     if (room?.mediaType === 'music' && room.musicUrl) {
       const fetchStream = async () => {
-        try {
-          const response = await fetch(`/api/tidal/track/?id=${room.musicUrl}&quality=LOSSLESS`);
-          const data = await response.json();
-          const decoded = JSON.parse(atob(data.data.manifest));
-          const tidalUrl = decoded.urls[0];
-          const proxyUrl = `https://hifi-api-production.up.railway.app/stream/?url=${encodeURIComponent(tidalUrl)}`;
-          setMusicStreamUrl(proxyUrl);
-        } catch (error) {
-          console.error("Failed to fetch stream URL", error);
+        const qualities = ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"];
+        const audio = audioRef.current;
+        
+        // Stop current playback cleanly first
+        if (audio) {
+          await safeAudioPause();
+          audio.src = "";
+          audio.load();
         }
+
+        for (const quality of qualities) {
+          try {
+            const response = await fetch(`/api/tidal/track/?id=${room.musicUrl}&quality=${quality}`);
+            if (!response.ok) continue;
+            
+            const data = await response.json();
+            if (!data?.data?.manifest) continue;
+
+            const decoded = JSON.parse(atob(data.data.manifest));
+            const tidalUrl = decoded.urls[0];
+            
+            if (tidalUrl) {
+              const proxyUrl = `/api/tidal/stream/?url=${encodeURIComponent(tidalUrl)}`;
+              
+              if (audio) {
+                audio.src = proxyUrl;
+                audio.load();
+
+                // Wait for canplay event before calling play()
+                await new Promise((resolve, reject) => {
+                  const onCanPlay = () => {
+                    audio.removeEventListener('canplay', onCanPlay);
+                    resolve(null);
+                  };
+                  const onError = (e: any) => {
+                    audio.removeEventListener('error', onError);
+                    reject(e);
+                  };
+                  audio.addEventListener('canplay', onCanPlay);
+                  audio.addEventListener('error', onError);
+                  setTimeout(() => {
+                    audio.removeEventListener('canplay', onCanPlay);
+                    resolve(null);
+                  }, 10000);
+                });
+
+                if (room?.isPlaying) {
+                  await safeAudioPlay();
+                }
+              }
+              
+              setMusicStreamUrl(proxyUrl);
+              addToast(`Playing in ${quality.replace("_", " ")}`);
+              return; // Stop trying lower qualities
+            }
+          } catch (error: any) {
+            console.log(`Quality ${quality} failed:`, error.message);
+            continue;
+          }
+        }
+        addToast("Playback failed for all qualities");
       };
       fetchStream();
     }
@@ -1537,19 +1624,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.load();
-    }
-  }, [musicStreamUrl]);
-
-  useEffect(() => {
-    if (audioRef.current) {
       if (room?.isPlaying) {
-        audioRef.current.play().catch(console.error);
+        safeAudioPlay();
       } else {
-        audioRef.current.pause();
+        safeAudioPause();
       }
     }
-  }, [room?.isPlaying, musicStreamUrl]);
+  }, [room?.isPlaying]);
 
   if (!room) return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-white">Loading Party...</div>;
 
@@ -1638,7 +1719,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                   room.mediaType === 'music' ? "bg-blue-600 text-white" : "bg-zinc-900 text-zinc-500"
                 )}
               >
-                YT MUSIC
+                TIDAL MUSIC
               </button>
               <button 
                 onClick={() => {
@@ -1659,12 +1740,6 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                 placeholder={room.mediaType === 'youtube' ? "Search YouTube..." : "Search Music..."}
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                onFocus={() => {
-                  if (searchInput.trim() && searchResults.length === 0) {
-                    // Re-trigger search if focused and has input but no results
-                    handleSearch(new Event('submit') as any);
-                  }
-                }}
                 className="w-full bg-zinc-900 border border-zinc-800 px-4 py-2.5 pr-10 rounded-xl focus:outline-none focus:border-zinc-600 transition-all text-sm"
               />
               <button
