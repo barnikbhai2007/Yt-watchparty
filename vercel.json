@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/proxy/oembed",
+      "destination": "https://www.youtube.com/oembed"
+    },
+    {
       "source": "/api/tidal/:path*",
       "destination": "https://hifi-api-production.up.railway.app/:path*"
     },

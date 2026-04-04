@@ -1488,7 +1488,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     try {
       // Using the user's custom yt-search backend directly (CORS fixed)
       const searchUrl = room?.mediaType === 'music'
-        ? `/api/tidal/search/?s=${encodeURIComponent(searchInput)}`
+        ? `/api/tidal/search?s=${encodeURIComponent(searchInput)}`
         : `https://yt-search-nine.vercel.app/search?q=${encodeURIComponent(searchInput)}`;
 
       const response = await fetch(searchUrl);
@@ -1568,7 +1568,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
         for (const quality of qualities) {
           try {
-            const response = await fetch(`/api/tidal/track/?id=${room.musicUrl}&quality=${quality}`);
+            const response = await fetch(`/api/tidal/track?id=${room.musicUrl}&quality=${quality}`);
             if (!response.ok) continue;
             
             const data = await response.json();
@@ -1578,7 +1578,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             const tidalUrl = decoded.urls[0];
             
             if (tidalUrl) {
-              const proxyUrl = `/api/tidal/stream/?url=${encodeURIComponent(tidalUrl)}`;
+              const proxyUrl = `/api/tidal/stream?url=${encodeURIComponent(tidalUrl)}`;
               
               if (audio) {
                 audio.src = proxyUrl;

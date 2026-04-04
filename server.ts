@@ -42,21 +42,30 @@ app.get('/api/proxy/oembed', async (req, res) => {
 
 app.use('/api/tidal', async (req, res) => {
   const targetUrl = `https://hifi-api-production.up.railway.app${req.url}`;
+  console.log(`[Tidal Proxy] ${req.method} ${req.url} -> ${targetUrl}`);
+  
   try {
-    const response = await fetch(targetUrl, {
+    const response = await axios({
       method: req.method,
+      url: targetUrl,
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json'
       },
-      body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body)
+      data: ['GET', 'HEAD'].includes(req.method) ? undefined : req.body,
+      validateStatus: () => true // Handle all status codes
     });
     
-    const data = await response.text();
-    res.status(response.status).send(data);
+    // If target returns HTML but we expect JSON, log it
+    const contentType = response.headers['content-type'] || '';
+    if (contentType.includes('text/html') && !req.url.includes('stream')) {
+      console.warn(`[Tidal Proxy] Warning: Target returned HTML for ${req.url}`);
+    }
+    
+    res.status(response.status).send(response.data);
   } catch (error: any) {
-    console.error("Tidal proxy failed:", error.message);
-    res.status(500).json({ error: "Tidal proxy failed" });
+    console.error(`[Tidal Proxy] Failed: ${error.message}`);
+    res.status(500).json({ error: "Tidal proxy failed", message: error.message });
   }
 });
 
