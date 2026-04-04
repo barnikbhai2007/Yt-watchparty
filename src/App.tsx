@@ -167,6 +167,10 @@ interface RoomState {
   updatedBy: string;
   name?: string;
   title?: string;
+  artist?: string;
+  artistId?: string;
+  album?: string;
+  albumId?: string;
   mediaType: 'youtube' | 'music';
   musicUrl?: string;
   thumbnailUrl?: string;
@@ -179,6 +183,11 @@ interface SearchResult {
   title: string;
   thumbnail: string;
   url?: string;
+  artist?: string;
+  artistId?: string;
+  album?: string;
+  albumId?: string;
+  type?: 'track' | 'album' | 'artist' | 'playlist' | 'video';
 }
 
 interface Message {
@@ -211,6 +220,8 @@ interface QueueItem {
   mediaId: string;
   mediaType: 'youtube' | 'music';
   title: string;
+  artist?: string;
+  album?: string;
   thumbnailUrl?: string;
   addedBy: string;
   addedByName: string;
@@ -749,6 +760,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [searchInput, setSearchInput] = useState('');
   
   const [musicStreamUrl, setMusicStreamUrl] = useState<string | null>(null);
+  const [lyrics, setLyrics] = useState<any>(null);
+  const [showLyrics, setShowLyrics] = useState(false);
+  const [recommendations, setRecommendations] = useState<SearchResult[]>([]);
   const audioRef = useRef<HTMLAudioElement>(null);
   
   const [isAutoQueue, setIsAutoQueue] = useState(false);
@@ -1492,11 +1506,46 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
       const data = await response.json();
       const results = room?.mediaType === 'music'
-        ? data.data.items.map((track: any) => ({
-            id: String(track.id),
-            title: `${track.title} - ${track.artist.name}`,
-            thumbnail: track.album?.cover ? `https://resources.tidal.com/images/${track.album.cover.replace(/-/g, "/")}/320x320.jpg` : ''
-          }))
+        ? [
+            ...(data.data.tracks?.items || []).map((track: any) => ({
+              id: String(track.id),
+              title: track.title,
+              artist: track.artist.name,
+              artistId: String(track.artist.id),
+              album: track.album.title,
+              albumId: String(track.album.id),
+              thumbnail: track.album?.cover ? `https://resources.tidal.com/images/${track.album.cover.replace(/-/g, "/")}/320x320.jpg` : '',
+              type: 'track'
+            })),
+            ...(data.data.albums?.items || []).map((album: any) => ({
+              id: String(album.id),
+              title: album.title,
+              artist: album.artist.name,
+              artistId: String(album.artist.id),
+              thumbnail: album.cover ? `https://resources.tidal.com/images/${album.cover.replace(/-/g, "/")}/320x320.jpg` : '',
+              type: 'album'
+            })),
+            ...(data.data.artists?.items || []).map((artist: any) => ({
+              id: String(artist.id),
+              title: artist.name,
+              thumbnail: artist.picture ? `https://resources.tidal.com/images/${artist.picture.replace(/-/g, "/")}/320x320.jpg` : '',
+              type: 'artist'
+            })),
+            ...(data.data.playlists?.items || []).map((playlist: any) => ({
+              id: String(playlist.uuid),
+              title: playlist.title,
+              thumbnail: playlist.image ? `https://resources.tidal.com/images/${playlist.image.replace(/-/g, "/")}/320x320.jpg` : '',
+              type: 'playlist'
+            })),
+            ...(data.data.videos?.items || []).map((video: any) => ({
+              id: String(video.id),
+              title: video.title,
+              artist: video.artists[0].name,
+              artistId: String(video.artists[0].id),
+              thumbnail: video.imageId ? `https://resources.tidal.com/images/${video.imageId.replace(/-/g, "/")}/640x360.jpg` : '',
+              type: 'video'
+            }))
+          ]
         : data;
       setSearchResults(results);
     } catch (error) {
@@ -1514,6 +1563,10 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     const updates: Partial<RoomState> = {
       videoId: result.id,
       title: result.title,
+      artist: result.artist,
+      artistId: result.artistId,
+      album: result.album,
+      albumId: result.albumId,
       thumbnailUrl: result.thumbnail,
       currentTime: 0,
       isPlaying: true
@@ -1535,6 +1588,8 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       mediaId: result.id,
       mediaType: room?.mediaType || 'youtube',
       title: result.title,
+      artist: result.artist,
+      album: result.album,
       thumbnailUrl: result.thumbnail,
       addedBy: auth.currentUser?.uid,
       addedByName: auth.currentUser?.displayName || 'Anonymous',
@@ -1545,6 +1600,174 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     setSearchInput('');
     addToast(`Added to queue: ${result.title}`);
   };
+
+  const fetchAlbumTracks = async (albumId: string) => {
+    setIsSearching(true);
+    setSearchResults([]);
+    try {
+      const response = await fetch(`/api/tidal/album?id=${albumId}`);
+      if (response.ok) {
+        const data = await response.json();
+        const results = data.data.items.map((item: any) => ({
+          id: String(item.item.id),
+          title: item.item.title,
+          artist: item.item.artist.name,
+          artistId: String(item.item.artist.id),
+          album: data.data.title,
+          albumId: String(data.data.id),
+          thumbnail: data.data.cover ? `https://resources.tidal.com/images/${data.data.cover.replace(/-/g, "/")}/320x320.jpg` : ''
+        }));
+        setSearchResults(results);
+      }
+    } catch (e) {
+      console.error("Failed to fetch album tracks", e);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const fetchArtistTopTracks = async (artistId: string) => {
+    setIsSearching(true);
+    setSearchResults([]);
+    try {
+      const response = await fetch(`/api/tidal/artist?f=${artistId}`);
+      if (response.ok) {
+        const data = await response.json();
+        const results = data.tracks.map((track: any) => ({
+          id: String(track.id),
+          title: track.title,
+          artist: track.artists[0].name,
+          artistId: String(track.artists[0].id),
+          album: track.album.title,
+          albumId: String(track.album.id),
+          thumbnail: track.album?.cover ? `https://resources.tidal.com/images/${track.album.cover.replace(/-/g, "/")}/320x320.jpg` : ''
+        }));
+        setSearchResults(results);
+      }
+    } catch (e) {
+      console.error("Failed to fetch artist tracks", e);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const fetchTopVideos = async () => {
+    setIsSearching(true);
+    setSearchResults([]);
+    try {
+      const response = await fetch(`/api/tidal/topvideos`);
+      if (response.ok) {
+        const data = await response.json();
+        const results = data.videos[0].pagedList.items.map((video: any) => ({
+          id: String(video.id),
+          title: video.title,
+          artist: video.artists[0].name,
+          artistId: String(video.artists[0].id),
+          thumbnail: video.imageId ? `https://resources.tidal.com/images/${video.imageId.replace(/-/g, "/")}/640x360.jpg` : ''
+        }));
+        setSearchResults(results);
+      }
+    } catch (e) {
+      console.error("Failed to fetch top videos", e);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const fetchMixTracks = async (mixId: string) => {
+    setIsSearching(true);
+    setSearchResults([]);
+    try {
+      const response = await fetch(`/api/tidal/mix?id=${mixId}`);
+      if (response.ok) {
+        const data = await response.json();
+        const results = data.items.map((item: any) => ({
+          id: String(item.id),
+          title: item.title,
+          artist: item.artists[0].name,
+          artistId: String(item.artists[0].id),
+          album: item.album.title,
+          albumId: String(item.album.id),
+          thumbnail: item.album?.cover ? `https://resources.tidal.com/images/${item.album.cover.replace(/-/g, "/")}/320x320.jpg` : '',
+          type: 'track'
+        }));
+        setSearchResults(results);
+      }
+    } catch (e) {
+      console.error("Failed to fetch mix tracks", e);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const fetchPlaylistTracks = async (playlistId: string) => {
+    setIsSearching(true);
+    setSearchResults([]);
+    try {
+      const response = await fetch(`/api/tidal/playlist?id=${playlistId}`);
+      if (response.ok) {
+        const data = await response.json();
+        const results = data.data.items.map((item: any) => ({
+          id: String(item.item.id),
+          title: item.item.title,
+          artist: item.item.artist.name,
+          artistId: String(item.item.artist.id),
+          album: item.item.album.title,
+          albumId: String(item.item.album.id),
+          thumbnail: item.item.album?.cover ? `https://resources.tidal.com/images/${item.item.album.cover.replace(/-/g, "/")}/320x320.jpg` : '',
+          type: 'track'
+        }));
+        setSearchResults(results);
+      }
+    } catch (e) {
+      console.error("Failed to fetch playlist tracks", e);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const fetchLyrics = async (id: string) => {
+    try {
+      const response = await fetch(`/api/tidal/lyrics?id=${id}`);
+      if (response.ok) {
+        const data = await response.json();
+        setLyrics(data.lyrics);
+      } else {
+        setLyrics(null);
+      }
+    } catch (e) {
+      console.error("Failed to fetch lyrics", e);
+      setLyrics(null);
+    }
+  };
+
+  const fetchRecommendations = async (id: string) => {
+    try {
+      const response = await fetch(`/api/tidal/recommendations?id=${id}`);
+      if (response.ok) {
+        const data = await response.json();
+        const results = data.data.items.map((item: any) => ({
+          id: String(item.track.id),
+          title: item.track.title,
+          artist: item.track.artist.name,
+          artistId: String(item.track.artist.id),
+          album: item.track.album.title,
+          albumId: String(item.track.album.id),
+          thumbnail: item.track.album?.cover ? `https://resources.tidal.com/images/${item.track.album.cover.replace(/-/g, "/")}/320x320.jpg` : ''
+        }));
+        setRecommendations(results);
+      }
+    } catch (e) {
+      console.error("Failed to fetch recommendations", e);
+    }
+  };
+
+  useEffect(() => {
+    if (room?.mediaType === 'music' && room.musicUrl) {
+      fetchLyrics(room.musicUrl);
+      fetchRecommendations(room.musicUrl);
+    }
+  }, [room?.musicUrl, room?.mediaType]);
 
   useEffect(() => {
     if (room?.mediaType === 'music' && room.musicUrl) {
@@ -1639,6 +1862,45 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white flex flex-col h-screen overflow-hidden">
+      {/* Lyrics Modal */}
+      <AnimatePresence>
+        {showLyrics && room && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[100] flex flex-col p-6 sm:p-12 pointer-events-auto"
+          >
+            <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center gap-4">
+                <img src={room.thumbnailUrl} alt="" className="w-12 h-12 rounded-xl object-cover shadow-lg" />
+                <div>
+                  <h2 className="text-lg font-black">{room.title}</h2>
+                  <p className="text-sm text-zinc-400 font-medium">{room.artist}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowLyrics(false)}
+                className="p-3 bg-white/10 hover:bg-white/20 rounded-2xl transition-all"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto no-scrollbar text-center space-y-6 py-12">
+              {lyrics ? (
+                lyrics.split('\n').map((line: string, i: number) => (
+                  <p key={i} className="text-2xl sm:text-4xl font-bold text-white/80 hover:text-white transition-colors cursor-default">
+                    {line}
+                  </p>
+                ))
+              ) : (
+                <p className="text-zinc-500 italic">No lyrics found for this track.</p>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Header */}
       <header className="p-2 sm:p-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-950/80 backdrop-blur-md z-20 shrink-0">
         <div className="flex items-center gap-2 sm:gap-4">
@@ -1724,6 +1986,14 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
               >
                 TIDAL MUSIC
               </button>
+              {room.mediaType === 'music' && (
+                <button 
+                  onClick={fetchTopVideos}
+                  className="px-4 py-2 bg-zinc-900 text-zinc-500 hover:text-white rounded-xl text-[10px] sm:text-xs font-bold transition-all"
+                >
+                  TRENDING
+                </button>
+              )}
               <button 
                 onClick={() => {
                   const url = `${window.location.origin}/#${roomId}`;
@@ -1770,27 +2040,67 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                   >
                     {searchResults.map((result) => (
                       <div key={result.id} className="flex items-center gap-3 p-3 hover:bg-zinc-800 transition-colors group/item">
-                        <img src={result.thumbnail || undefined} alt="" className="w-16 h-10 object-cover rounded-lg shrink-0" />
+                        <img src={result.thumbnail || undefined} alt="" className="w-16 h-10 object-cover rounded-lg shrink-0 shadow-md" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold truncate">{result.title}</p>
+                          <p className="text-xs font-bold truncate text-white">{result.title}</p>
+                          {result.artist && (
+                            <p className="text-[10px] text-zinc-400 truncate font-medium">
+                              <button 
+                                type="button"
+                                onClick={() => result.artistId && fetchArtistTopTracks(result.artistId)}
+                                className="hover:text-white transition-colors"
+                              >
+                                {result.artist}
+                              </button>
+                              {result.album && (
+                                <>
+                                  {" • "}
+                                  <button 
+                                    type="button"
+                                    onClick={() => result.albumId && fetchAlbumTracks(result.albumId)}
+                                    className="hover:text-white transition-colors"
+                                  >
+                                    {result.album}
+                                  </button>
+                                </>
+                              )}
+                            </p>
+                          )}
                         </div>
                         <div className="flex gap-2 opacity-0 group-hover/item:opacity-100 transition-opacity">
-                          <button 
-                            type="button"
-                            onClick={() => selectSearchResult(result)}
-                            className="p-2 bg-zinc-100 text-black rounded-lg hover:bg-white transition-colors"
-                            title="Play Now"
-                          >
-                            <Play size={14} fill="currentColor" />
-                          </button>
-                          <button 
-                            type="button"
-                            onClick={() => addToQueueFromResult(result)}
-                            className="p-2 bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 transition-colors"
-                            title="Add to Queue"
-                          >
-                            <Plus size={14} />
-                          </button>
+                          {(!result.type || result.type === 'track' || result.type === 'video') ? (
+                            <>
+                              <button 
+                                type="button"
+                                onClick={() => selectSearchResult(result)}
+                                className="p-2 bg-zinc-100 text-black rounded-lg hover:bg-white transition-colors"
+                                title="Play Now"
+                              >
+                                <Play size={14} fill="currentColor" />
+                              </button>
+                              <button 
+                                type="button"
+                                onClick={() => addToQueueFromResult(result)}
+                                className="p-2 bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 transition-colors"
+                                title="Add to Queue"
+                              >
+                                <Plus size={14} />
+                              </button>
+                            </>
+                          ) : (
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                if (result.type === 'album') fetchAlbumTracks(result.id);
+                                else if (result.type === 'artist') fetchArtistTopTracks(result.id);
+                                else if (result.type === 'playlist') fetchPlaylistTracks(result.id);
+                              }}
+                              className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors flex items-center gap-2 text-[10px] font-bold"
+                            >
+                              <List size={14} />
+                              VIEW
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1875,7 +2185,33 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     <h3 className="text-xl sm:text-2xl font-black tracking-tight truncate w-full px-4">
                       {room.title || room.name || "Music Jam"}
                     </h3>
-                    <p className="text-blue-400 font-bold text-[10px] uppercase tracking-[0.2em]">Music Mode</p>
+                    <div className="flex flex-col items-center gap-1">
+                      {room.artist && (
+                        <button 
+                          onClick={() => {
+                            if (room.artistId) {
+                              fetchArtistTopTracks(room.artistId);
+                            } else {
+                              setSearchInput(room.artist!);
+                              handleSearch();
+                            }
+                          }}
+                          className="text-zinc-400 hover:text-white text-sm font-medium transition-colors"
+                        >
+                          {room.artist}
+                        </button>
+                      )}
+                      <p className="text-blue-400 font-bold text-[10px] uppercase tracking-[0.2em]">Music Mode</p>
+                    </div>
+                    {lyrics && (
+                      <button 
+                        onClick={() => setShowLyrics(true)}
+                        className="mt-2 mx-auto px-4 py-1.5 bg-white/10 hover:bg-white/20 rounded-full text-[10px] font-bold flex items-center gap-2 transition-all"
+                      >
+                        <MessageSquare size={12} />
+                        VIEW LYRICS
+                      </button>
+                    )}
                   </div>
 
                   <div className="w-full px-8 z-50">
@@ -1969,7 +2305,39 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     </button>
                   </div>
 
-                  {/* Hidden Player for Audio Sync */}
+                  {recommendations.length > 0 && (
+                    <div className="w-full pt-8 space-y-4 z-50">
+                      <div className="flex items-center justify-between px-2">
+                        <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Similar Tracks</h4>
+                        <button 
+                          onClick={() => fetchRecommendations(room.musicUrl!)}
+                          className="text-[10px] font-bold text-blue-400 hover:text-blue-300 transition-colors"
+                        >
+                          REFRESH
+                        </button>
+                      </div>
+                      <div className="flex gap-4 overflow-x-auto pb-4 no-scrollbar -mx-2 px-2">
+                        {recommendations.map((rec) => (
+                          <button
+                            key={rec.id}
+                            onClick={() => selectSearchResult(rec)}
+                            className="flex-shrink-0 w-32 group text-left space-y-2"
+                          >
+                            <div className="relative aspect-square rounded-2xl overflow-hidden shadow-lg border border-white/5">
+                              <img src={rec.thumbnail} alt="" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <Play size={24} className="text-white fill-white" />
+                              </div>
+                            </div>
+                            <div className="px-1">
+                              <p className="text-[10px] font-bold truncate text-zinc-100">{rec.title}</p>
+                              <p className="text-[9px] font-medium truncate text-zinc-500">{rec.artist}</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="absolute top-0 left-0 w-1 h-1 opacity-0 pointer-events-none overflow-hidden">
                     {room.videoId && (
                       <YouTube
@@ -2182,8 +2550,11 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                             <img src={item.thumbnailUrl} alt="" className="w-8 h-8 object-cover rounded-md shrink-0" />
                           )}
                           <div className="min-w-0">
-                            <p className="text-xs font-bold truncate">{item.title}</p>
-                            <p className="text-[10px] text-zinc-500">Added by {item.addedByName}</p>
+                            <p className="text-xs font-bold truncate text-white">{item.title}</p>
+                            {item.artist && (
+                              <p className="text-[10px] text-zinc-400 truncate font-medium">{item.artist}</p>
+                            )}
+                            <p className="text-[9px] text-zinc-600 truncate mt-0.5">Added by {item.addedByName}</p>
                           </div>
                         </div>
                         <button 
