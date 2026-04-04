@@ -50,34 +50,13 @@ import {
   SkipBack,
   SkipForward,
   Repeat,
-  Shuffle,
-  Headphones
+  Shuffle
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
 import { auth, db } from './firebase';
-
-// --- Logo Component ---
-const Logo = ({ className = "w-8 h-8" }: { className?: string }) => (
-  <div className={cn("relative flex items-center justify-center", className)}>
-    <svg viewBox="0 0 100 100" className="w-full h-full">
-      <defs>
-        <linearGradient id="logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#3b82f6" />
-          <stop offset="100%" stopColor="#1d4ed8" />
-        </linearGradient>
-      </defs>
-      {/* Outer swirling paths */}
-      <circle cx="50" cy="50" r="45" fill="none" stroke="url(#logo-grad)" strokeWidth="8" strokeDasharray="180 100" className="animate-[spin_8s_linear_infinite]" />
-      <circle cx="50" cy="50" r="35" fill="none" stroke="#60a5fa" strokeWidth="4" strokeDasharray="120 60" className="animate-[spin_12s_linear_infinite_reverse]" />
-      {/* Inner person icon */}
-      <circle cx="50" cy="42" r="10" fill="url(#logo-grad)" />
-      <path d="M50 55c-12 0-22 8-22 18h44c0-10-10-18-22-18z" fill="url(#logo-grad)" />
-    </svg>
-  </div>
-);
 
 // --- Utils ---
 enum OperationType {
@@ -419,56 +398,14 @@ const Login = () => {
   );
 };
 
-function extractRoomId(input: string) {
-  if (!input) return '';
-  const trimmed = input.trim();
-  if (trimmed.includes('#')) {
-    return trimmed.split('#').pop() || '';
-  }
-  if (trimmed.includes('/')) {
-    return trimmed.split('/').pop() || '';
-  }
-  return trimmed;
-}
-
 const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'music') => void }) => {
   const [roomId, setRoomId] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
   const [lobbyType, setLobbyType] = useState<'youtube' | 'music'>('youtube');
   const [isSearching, setIsSearching] = useState(false);
-  const [isJoining, setIsJoining] = useState(false);
   const [isAutoQueue, setIsAutoQueue] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const searchContainerRef = useRef<HTMLDivElement>(null);
-
-  const [toasts, setToasts] = useState<{id: string, message: string}[]>([]);
-  const addToast = (message: string) => {
-    const id = nanoid();
-    setToasts(prev => [...prev, { id, message }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
-  };
-
-  const handleJoinExisting = async () => {
-    const id = extractRoomId(roomId);
-    if (!id) return;
-
-    setIsJoining(true);
-    try {
-      const roomRef = doc(db, 'rooms', id);
-      const roomSnap = await getDoc(roomRef);
-      
-      if (roomSnap.exists()) {
-        onJoinRoom(id);
-      } else {
-        addToast("Room not found. Please check the ID.");
-      }
-    } catch (error) {
-      console.error("Error joining room:", error);
-      addToast("Failed to join room. Try again.");
-    } finally {
-      setIsJoining(false);
-    }
-  };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -495,12 +432,19 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
 
     try {
       const searchUrl = lobbyType === 'music'
-        ? `https://yt-search-nine.vercel.app/music?q=${encodeURIComponent(videoUrl)}`
+        ? `https://hifi-api-production.up.railway.app/search/?s=${encodeURIComponent(videoUrl)}`
         : `https://yt-search-nine.vercel.app/search?q=${encodeURIComponent(videoUrl)}`;
       
       const response = await fetch(searchUrl);
       if (!response.ok) throw new Error("Search API request failed");
-      const results = await response.json();
+      const data = await response.json();
+      const results = lobbyType === 'music'
+        ? data.data.items.map((track: any) => ({
+            id: track.id,
+            title: `${track.title} - ${track.artist.name}`,
+            thumbnail: `https://resources.tidal.com/images/${track.album.cover.replace(/-/g, "/")}/320x320.jpg`
+          }))
+        : data;
       setSearchResults(results);
     } catch (error) {
       console.error("Search failed:", error);
@@ -603,21 +547,14 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-4 sm:p-6 flex flex-col items-center justify-center relative overflow-hidden">
+    <div className="min-h-screen bg-zinc-950 text-white p-4 sm:p-6 flex flex-col items-center justify-center relative">
       <UserProfile className="absolute top-4 right-4 z-50" />
-      
-      {/* Background Glows */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-blue-600/10 blur-[120px] rounded-full -z-10" />
-      <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-red-600/5 blur-[100px] rounded-full -z-10" />
-
-      <div className="max-w-4xl w-full space-y-8 sm:space-y-12 relative z-10">
-        <header className="text-center space-y-6 flex flex-col items-center">
-          <Logo className="w-24 h-24 sm:w-32 sm:h-32 drop-shadow-[0_0_30px_rgba(59,130,246,0.3)]" />
-          <h1 className="text-5xl sm:text-7xl font-black tracking-tighter italic flex items-center gap-2">
+      <div className="max-w-4xl w-full space-y-8 sm:space-y-12">
+        <header className="text-center space-y-4">
+          <h1 className="text-4xl sm:text-6xl font-black tracking-tighter italic">
             <span className="text-white">SYNC</span>
-            <span className="text-blue-500">·</span>
             <span className={cn(lobbyType === 'youtube' ? "text-red-600" : "text-blue-500")}>
-              ME
+              {lobbyType === 'youtube' ? "TUBE" : "JAM"}
             </span>
           </h1>
           <div className="flex justify-center gap-2 sm:gap-4">
@@ -714,47 +651,27 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
           </div>
 
           {/* Join Room */}
-          <div className="bg-zinc-900/50 border border-zinc-800 p-6 sm:p-8 rounded-3xl space-y-6 relative">
-            {/* Toasts for Lobby */}
-            <div className="absolute -top-12 left-0 right-0 flex flex-col items-center gap-2 pointer-events-none z-50">
-              <AnimatePresence>
-                {toasts.map(t => (
-                  <motion.div
-                    key={t.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="bg-zinc-800 text-white px-4 py-2 rounded-lg shadow-xl border border-zinc-700 text-xs font-medium"
-                  >
-                    {t.message}
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
-
+          <div className="bg-zinc-900/50 border border-zinc-800 p-6 sm:p-8 rounded-3xl space-y-6">
             <div className="flex items-center gap-3 text-zinc-400">
               <ArrowRight size={24} />
               <h2 className="text-xl font-bold">Join Existing</h2>
             </div>
             <div className="space-y-4">
               <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Room ID or Link</label>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Room ID</label>
                 <input
                   type="text"
-                  placeholder="Enter ID or paste link"
+                  placeholder="Enter ID"
                   value={roomId}
                   onChange={(e) => setRoomId(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleJoinExisting()}
                   className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl focus:outline-none focus:border-zinc-600 transition-colors"
                 />
               </div>
               <button
-                onClick={handleJoinExisting}
-                disabled={isJoining || !roomId.trim()}
-                className="w-full py-3 bg-zinc-100 text-black hover:bg-white font-bold rounded-xl transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2"
+                onClick={() => roomId && onJoinRoom(roomId)}
+                className="w-full py-3 bg-zinc-100 text-black hover:bg-white font-bold rounded-xl transition-all active:scale-[0.98]"
               >
-                {isJoining && <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />}
-                {isJoining ? "Joining..." : "Join Party"}
+                Join Party
               </button>
             </div>
           </div>
@@ -832,7 +749,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchInput, setSearchInput] = useState('');
-  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+  
+  const [musicStreamUrl, setMusicStreamUrl] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   
   const [isAutoQueue, setIsAutoQueue] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -994,23 +913,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     });
 
     const unsubMessages = onSnapshot(query(messagesRef, orderBy('timestamp', 'asc'), limit(50)), (snapshot) => {
-      const newMessages = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Message));
-      setMessages(newMessages);
-
-      // Check for new messages to show notification dot
-      snapshot.docChanges().forEach(change => {
-        if (change.type === 'added') {
-          const data = change.doc.data() as Message;
-          // If message is from someone else and chat is not active
-          if (data.senderId !== auth.currentUser?.uid) {
-            // We use a functional update or refs if needed, but here we can check the current state
-            // Note: inside onSnapshot, showSidebar and activeTab might be stale if not handled carefully
-            // but usually React state in onSnapshot is fine if the effect is re-run or if we use refs.
-            // However, we can also just set it to true and let the other effect clear it.
-            setHasUnreadMessages(true);
-          }
-        }
-      });
+      setMessages(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Message)));
     });
 
     let initialActivitiesLoad = true;
@@ -1062,12 +965,6 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       unsubQueue();
     };
   }, [roomId, player, onLeave]);
-
-  useEffect(() => {
-    if (showSidebar && activeTab === 'chat') {
-      setHasUnreadMessages(false);
-    }
-  }, [showSidebar, activeTab]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1416,19 +1313,8 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     const isPlaying = newState === YouTube.PlayerState.PLAYING;
     const currentTime = event.target.getCurrentTime();
 
-    // Only the leader should sync their player state to Firestore
-    const isLeader = participants[0]?.uid === auth.currentUser?.uid;
-    if (!isLeader) return;
-
     // Prevent echoing back the state if it matches what the room already says
     if (room && room.isPlaying === isPlaying && Math.abs((room.currentTime || 0) - currentTime) < 2) {
-      return;
-    }
-
-    // CRITICAL: If the tab is hidden (backgrounded), the browser might auto-pause.
-    // We should NOT sync this auto-pause to other users, as it would stop the music for everyone.
-    if (newState === YouTube.PlayerState.PAUSED && document.visibilityState === 'hidden') {
-      console.log("Ignoring background auto-pause to preserve background play for others.");
       return;
     }
 
@@ -1569,8 +1455,32 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   };
 
   useEffect(() => {
-    // Music logic removed as we use YouTube player for both modes now.
+    if (room?.mediaType === 'music' && room.musicUrl) {
+      const fetchStream = async () => {
+        try {
+          const response = await fetch(`https://hifi-api-production.up.railway.app/track/?id=${room.musicUrl}&quality=LOSSLESS`);
+          const data = await response.json();
+          const decoded = JSON.parse(atob(data.data.manifest));
+          const tidalUrl = decoded.urls[0];
+          const proxyUrl = `https://hifi-api-production.up.railway.app/stream/?url=${encodeURIComponent(tidalUrl)}`;
+          setMusicStreamUrl(proxyUrl);
+        } catch (error) {
+          console.error("Failed to fetch stream URL", error);
+        }
+      };
+      fetchStream();
+    }
   }, [room?.musicUrl, room?.mediaType]);
+
+  useEffect(() => {
+    if (audioRef.current) {
+      if (room?.isPlaying) {
+        audioRef.current.play().catch(console.error);
+      } else {
+        audioRef.current.pause();
+      }
+    }
+  }, [room?.isPlaying, musicStreamUrl]);
 
   if (!room) return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-white">Loading Party...</div>;
 
@@ -1582,14 +1492,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           <button onClick={onLeave} className="p-1.5 sm:p-2 hover:bg-zinc-900 rounded-lg transition-colors">
             <LogOut size={18} className="rotate-180 sm:w-5 sm:h-5" />
           </button>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <Logo className="w-6 h-6 sm:w-8 sm:h-8" />
-            <div className="min-w-0">
-              <h2 className="font-bold text-xs sm:text-lg leading-tight truncate max-w-[100px] sm:max-w-none">
-                {room.name || "Sync-Me Room"}
-              </h2>
-              <p className="text-[8px] sm:text-xs text-zinc-500 font-mono uppercase tracking-wider truncate">{roomId}</p>
-            </div>
+          <div className="min-w-0">
+            <h2 className="font-bold text-xs sm:text-lg leading-tight truncate max-w-[100px] sm:max-w-none">{room.name || "Watch Party"}</h2>
+            <p className="text-[8px] sm:text-xs text-zinc-500 font-mono uppercase tracking-wider truncate">{roomId}</p>
           </div>
         </div>
         
@@ -1605,12 +1510,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           
           <button 
             onClick={() => setShowSidebar(!showSidebar)}
-            className="hidden lg:flex p-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-zinc-400 relative"
+            className="hidden lg:flex p-2 bg-zinc-900 hover:bg-zinc-800 rounded-xl text-zinc-400"
           >
             <MessageSquare size={20} />
-            {hasUnreadMessages && !(showSidebar && activeTab === 'chat') && (
-              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-600 rounded-full border-2 border-zinc-900 animate-pulse" />
-            )}
           </button>
 
           <div className="hidden sm:flex -space-x-2">
@@ -1749,10 +1651,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             </form>
           </div>
 
-          <div className={cn(
-            "bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0 relative",
-            room.mediaType === 'youtube' ? "aspect-video" : "h-[450px] sm:h-[500px]"
-          )}>
+          <div className="aspect-video bg-black rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-zinc-900 shrink-0 relative">
             {room.mediaType === 'youtube' ? (
               room.videoId ? (
                 <YouTube
@@ -1775,59 +1674,50 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
               )
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-zinc-900 via-blue-950 to-zinc-900 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+                <audio
+                  ref={audioRef}
+                  src={musicStreamUrl || undefined}
+                  onPlay={() => updateRoomState({ isPlaying: true })}
+                  onPause={() => updateRoomState({ isPlaying: false })}
+                  className="hidden"
+                />
                 {/* Background Glow */}
                 <div className="absolute inset-0 bg-blue-500/10 blur-[120px] rounded-full scale-150 animate-pulse" />
                 
-                <div className="relative z-10 flex flex-col items-center text-center space-y-4 sm:space-y-6 w-full max-w-sm">
+                <div className="relative z-10 flex flex-col items-center text-center space-y-6 w-full max-w-sm">
                   <motion.div 
                     animate={{ 
-                      scale: room.isPlaying ? [1, 1.02, 1] : 1,
-                      rotate: room.isPlaying ? [0, 1, -1, 0] : 0
+                      scale: room.isPlaying ? [1, 1.05, 1] : 1,
+                      rotate: room.isPlaying ? [0, 2, -2, 0] : 0
                     }}
                     transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}
                     className="relative"
                   >
-                    <div className="w-40 h-40 sm:w-64 sm:h-64 rounded-3xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10 bg-zinc-800 flex items-center justify-center">
-                      {room.videoId ? (
-                        <img 
-                          src={`https://img.youtube.com/vi/${room.videoId}/hqdefault.jpg`}
-                          alt="Album Art"
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            // Try sddefault if hqdefault fails, then fallback
-                            if (target.src.includes('hqdefault')) {
-                              target.src = `https://img.youtube.com/vi/${room.videoId}/mqdefault.jpg`;
-                            } else {
-                              target.src = 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop';
-                            }
-                          }}
-                        />
-                      ) : (
-                        <ActivityIcon size={48} className="text-zinc-700" />
-                      )}
-                    </div>
+                    <img 
+                      src={`https://img.youtube.com/vi/${room.videoId}/maxresdefault.jpg`}
+                      alt="Album Art"
+                      className="w-48 h-48 sm:w-64 sm:h-64 object-cover rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        if (!target.src.endsWith('0.jpg')) {
+                          target.src = `https://img.youtube.com/vi/${room.videoId}/0.jpg`;
+                        } else {
+                          target.src = 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop';
+                        }
+                      }}
+                    />
                     {room.isPlaying && (
-                      <div className={cn(
-                        "absolute -bottom-2 -right-2 p-2 sm:p-3 rounded-2xl shadow-xl transition-colors",
-                        room.mediaType === 'youtube' ? "bg-red-600" : "bg-blue-600"
-                      )}>
-                        <ActivityIcon size={20} className="text-white animate-bounce" />
+                      <div className="absolute -bottom-4 -right-4 bg-blue-600 p-3 rounded-2xl shadow-xl">
+                        <ActivityIcon size={24} className="text-white animate-bounce" />
                       </div>
                     )}
                   </motion.div>
 
-                  <div className="space-y-1">
-                    <h3 className="text-lg sm:text-2xl font-black tracking-tight truncate w-full px-4">
+                  <div className="space-y-2">
+                    <h3 className="text-xl sm:text-2xl font-black tracking-tight truncate w-full px-4">
                       {room.title || room.name || "Music Jam"}
                     </h3>
-                    <p className={cn(
-                      "font-bold text-[10px] uppercase tracking-[0.2em]",
-                      room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500"
-                    )}>
-                      {room.mediaType === 'music' ? 'YT Music Mode' : 'Audio Only Mode'}
-                    </p>
+                    <p className="text-blue-400 font-bold text-[10px] uppercase tracking-[0.2em]">YT Music Mode</p>
                   </div>
 
                   <div className="w-full px-8 z-50">
@@ -1853,21 +1743,21 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-center gap-4 sm:gap-6 pt-2 z-50">
+                  <div className="flex items-center justify-center gap-6 pt-2 z-50">
                     <button
                       onClick={toggleShuffle}
                       className={cn(
                         "p-2 hover:bg-zinc-800 rounded-full transition-colors",
-                        room.isShuffled ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
+                        room.isShuffled ? "text-blue-500" : "text-zinc-500"
                       )}
                     >
-                      <Shuffle size={18} className="sm:w-5 sm:h-5" />
+                      <Shuffle size={20} />
                     </button>
                     <button
                       onClick={playPrevious}
-                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors text-zinc-400"
+                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors"
                     >
-                      <SkipBack size={20} className="sm:w-6 sm:h-6" fill="currentColor" />
+                      <SkipBack size={24} fill="currentColor" />
                     </button>
                     <button
                       onClick={() => {
@@ -1882,37 +1772,31 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                       }}
                       disabled={!player}
                       className={cn(
-                        "w-14 h-14 sm:w-20 sm:h-20 flex items-center justify-center bg-white text-black rounded-full hover:scale-110 transition-all shadow-[0_0_50px_rgba(255,255,255,0.2)] active:scale-95",
+                        "w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center bg-white text-black rounded-full hover:scale-110 transition-all shadow-[0_0_50px_rgba(255,255,255,0.2)] active:scale-95",
                         !player && "opacity-50 cursor-not-allowed"
                       )}
                     >
-                      {room.isPlaying ? <Pause size={28} className="sm:w-8 sm:h-8" fill="currentColor" /> : <Play size={28} className="sm:w-8 sm:h-8 ml-1" fill="currentColor" />}
+                      {room.isPlaying ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" className="ml-1" />}
                     </button>
                     <button
                       onClick={playNext}
-                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors text-zinc-400"
+                      className="p-2 hover:bg-zinc-800 rounded-full transition-colors"
                     >
-                      <SkipForward size={20} className="sm:w-6 sm:h-6" fill="currentColor" />
+                      <SkipForward size={24} fill="currentColor" />
                     </button>
                     <button
                       onClick={toggleRepeat}
                       className={cn(
                         "p-2 hover:bg-zinc-800 rounded-full transition-colors relative",
-                        room.repeatMode !== 'off' ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
+                        room.repeatMode !== 'off' ? "text-blue-500" : "text-zinc-500"
                       )}
                     >
-                      <Repeat size={18} className="sm:w-5 sm:h-5" />
+                      <Repeat size={24} />
                       {room.repeatMode === 'one' && (
-                        <span className={cn(
-                          "absolute -top-1 -right-1 text-[8px] font-bold text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950",
-                          room.mediaType === 'youtube' ? "bg-red-500" : "bg-blue-500"
-                        )}>1</span>
+                        <span className="absolute -top-1 -right-1 text-[8px] font-bold bg-blue-500 text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950">1</span>
                       )}
                       {room.repeatMode === 'all' && (
-                        <span className={cn(
-                          "absolute -top-1 -right-1 text-[8px] font-bold text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950",
-                          room.mediaType === 'youtube' ? "bg-red-500" : "bg-blue-500"
-                        )}>A</span>
+                        <span className="absolute -top-1 -right-1 text-[8px] font-bold bg-blue-500 text-white rounded-full w-4 h-4 flex items-center justify-center border-2 border-zinc-950">A</span>
                       )}
                     </button>
                   </div>
@@ -1937,13 +1821,6 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                       />
                     )}
                   </div>
-                  <button
-                    onClick={() => updateRoomState({ mediaType: 'youtube' })}
-                    className="mt-4 flex items-center justify-center gap-2 text-zinc-500 hover:text-white transition-colors w-full"
-                  >
-                    <YoutubeIcon size={16} />
-                    <span>Back to Video</span>
-                  </button>
                 </div>
 
                 {/* Visualizer Bars */}
@@ -1964,15 +1841,6 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
               </div>
             )}
           </div>
-          {room.mediaType === 'youtube' && (
-            <button
-              onClick={() => updateRoomState({ mediaType: 'music' })}
-              className="mt-4 flex items-center justify-center gap-2 text-zinc-500 hover:text-white transition-colors w-full"
-            >
-              <Headphones size={16} />
-              <span>Background Play</span>
-            </button>
-          )}
           <FloatingEmojis roomId={roomId} />
 
           {/* Emoji Bar */}
@@ -2220,7 +2088,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           onClick={() => setShowSidebar(false)}
           className={cn(
             "flex flex-col items-center gap-1 transition-all",
-            !showSidebar ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
+            !showSidebar ? "text-blue-500" : "text-zinc-500"
           )}
         >
           <Play size={20} fill={!showSidebar ? "currentColor" : "none"} />
@@ -2230,19 +2098,13 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           onClick={() => {
             setActiveTab('chat');
             setShowSidebar(true);
-            setHasUnreadMessages(false);
           }}
           className={cn(
-            "flex flex-col items-center gap-1 transition-all relative",
-            (showSidebar && activeTab === 'chat') ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
+            "flex flex-col items-center gap-1 transition-all",
+            (showSidebar && activeTab === 'chat') ? "text-blue-500" : "text-zinc-500"
           )}
         >
-          <div className="relative">
-            <MessageSquare size={20} fill={(showSidebar && activeTab === 'chat') ? "currentColor" : "none"} />
-            {hasUnreadMessages && !(showSidebar && activeTab === 'chat') && (
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-600 rounded-full border-2 border-zinc-950 animate-pulse" />
-            )}
-          </div>
+          <MessageSquare size={20} fill={(showSidebar && activeTab === 'chat') ? "currentColor" : "none"} />
           <span className="text-[10px] font-bold">CHAT</span>
         </button>
         <button 
@@ -2252,7 +2114,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           }}
           className={cn(
             "flex flex-col items-center gap-1 transition-all",
-            (showSidebar && activeTab === 'queue') ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
+            (showSidebar && activeTab === 'queue') ? "text-blue-500" : "text-zinc-500"
           )}
         >
           <List size={20} />
@@ -2265,7 +2127,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           }}
           className={cn(
             "flex flex-col items-center gap-1 transition-all",
-            (showSidebar && activeTab === 'activity') ? (room.mediaType === 'youtube' ? "text-red-500" : "text-blue-500") : "text-zinc-500"
+            (showSidebar && activeTab === 'activity') ? "text-blue-500" : "text-zinc-500"
           )}
         >
           <ActivityIcon size={20} />
