@@ -444,6 +444,10 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
     setSearchResults([]);
 
     try {
+
+      const MUSIC_API = "https://hifi-api-production.up.railway.app";
+
+      
       const searchUrl = lobbyType === 'music'
         ? `/api/tidal/search/?s=${encodeURIComponent(videoUrl)}`
         : `https://yt-search-nine.vercel.app/search?q=${encodeURIComponent(videoUrl)}`;
