@@ -169,6 +169,7 @@ interface RoomState {
   title?: string;
   mediaType: 'youtube' | 'music';
   musicUrl?: string;
+  thumbnailUrl?: string;
   repeatMode: 'off' | 'one' | 'all';
   isShuffled: boolean;
 }
@@ -210,6 +211,7 @@ interface QueueItem {
   mediaId: string;
   mediaType: 'youtube' | 'music';
   title: string;
+  thumbnailUrl?: string;
   addedBy: string;
   addedByName: string;
   timestamp: any;
@@ -442,7 +444,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
         ? data.data.items.map((track: any) => ({
             id: track.id,
             title: `${track.title} - ${track.artist.name}`,
-            thumbnail: `https://resources.tidal.com/images/${track.album.cover.replace(/-/g, "/")}/320x320.jpg`
+            thumbnail: track.album?.cover ? `https://resources.tidal.com/images/${track.album.cover.replace(/-/g, "/")}/320x320.jpg` : ''
           }))
         : data;
       setSearchResults(results);
@@ -460,13 +462,14 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
     try {
       await setDoc(roomRef, {
         videoId: result.id,
-        musicUrl: "",
+        musicUrl: lobbyType === 'music' ? result.id : "",
         currentTime: 0,
         isPlaying: true,
         lastUpdated: serverTimestamp(),
         updatedBy: auth.currentUser?.uid,
         name: lobbyType === 'youtube' ? "YouTube Party" : "Music Jam",
         title: result.title,
+        thumbnailUrl: result.thumbnail,
         mediaType: lobbyType,
         repeatMode: 'off',
         isShuffled: false
@@ -1050,6 +1053,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         mediaId: room.videoId,
         mediaType: room.mediaType,
         title: room.title || "Unknown Title",
+        thumbnailUrl: room.thumbnailUrl || null,
         timestamp: serverTimestamp()
       });
       
@@ -1060,6 +1064,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           mediaId: room.videoId,
           mediaType: room.mediaType,
           title: room.title || "Unknown Title",
+          thumbnailUrl: room.thumbnailUrl || null,
           addedBy: auth.currentUser?.uid,
           addedByName: auth.currentUser?.displayName || 'System',
           timestamp: serverTimestamp()
@@ -1114,7 +1119,8 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         currentTime: 0,
         isPlaying: true,
         title: nextItem.title || "Unknown Title",
-        videoId: nextItem.mediaId
+        videoId: nextItem.mediaId,
+        thumbnailUrl: nextItem.thumbnailUrl
       };
       if (nextItem.mediaType === 'music') {
         updates.musicUrl = nextItem.mediaId;
@@ -1160,6 +1166,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
           mediaId: room.videoId,
           mediaType: room.mediaType,
           title: room.title || "Unknown Title",
+          thumbnailUrl: room.thumbnailUrl || null,
           addedBy: auth.currentUser?.uid,
           addedByName: auth.currentUser?.displayName || 'System',
           timestamp: newTimestamp
@@ -1171,7 +1178,8 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         currentTime: 0,
         isPlaying: true,
         title: prevData.title || "Unknown Title",
-        videoId: prevData.mediaId
+        videoId: prevData.mediaId,
+        thumbnailUrl: prevData.thumbnailUrl || null
       };
       if (prevData.mediaType === 'music') {
         updates.musicUrl = prevData.mediaId;
@@ -1398,7 +1406,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     try {
       // Using the user's custom yt-search backend directly (CORS fixed)
       const searchUrl = room?.mediaType === 'music'
-        ? `https://yt-search-nine.vercel.app/music?q=${encodeURIComponent(searchInput)}`
+        ? `https://hifi-api-production.up.railway.app/search/?s=${encodeURIComponent(searchInput)}`
         : `https://yt-search-nine.vercel.app/search?q=${encodeURIComponent(searchInput)}`;
 
       const response = await fetch(searchUrl);
@@ -1407,7 +1415,14 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         throw new Error("Search API request failed");
       }
 
-      const results = await response.json();
+      const data = await response.json();
+      const results = room?.mediaType === 'music'
+        ? data.data.items.map((track: any) => ({
+            id: track.id,
+            title: `${track.title} - ${track.artist.name}`,
+            thumbnail: track.album?.cover ? `https://resources.tidal.com/images/${track.album.cover.replace(/-/g, "/")}/320x320.jpg` : ''
+          }))
+        : data;
       setSearchResults(results);
     } catch (error) {
       console.error("Search failed:", error);
@@ -1424,6 +1439,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     const updates: Partial<RoomState> = {
       videoId: result.id,
       title: result.title,
+      thumbnailUrl: result.thumbnail,
       currentTime: 0,
       isPlaying: true
     };
@@ -1444,6 +1460,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       mediaId: result.id,
       mediaType: room?.mediaType || 'youtube',
       title: result.title,
+      thumbnailUrl: result.thumbnail,
       addedBy: auth.currentUser?.uid,
       addedByName: auth.currentUser?.displayName || 'Anonymous',
       timestamp: serverTimestamp()
@@ -1471,6 +1488,12 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
       fetchStream();
     }
   }, [room?.musicUrl, room?.mediaType]);
+
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.load();
+    }
+  }, [musicStreamUrl]);
 
   useEffect(() => {
     if (audioRef.current) {
@@ -1694,13 +1717,17 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     className="relative"
                   >
                     <img 
-                      src={`https://img.youtube.com/vi/${room.videoId}/maxresdefault.jpg`}
+                      src={room.mediaType === 'music' ? (room.thumbnailUrl || 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop') : `https://img.youtube.com/vi/${room.videoId}/maxresdefault.jpg`}
                       alt="Album Art"
                       className="w-48 h-48 sm:w-64 sm:h-64 object-cover rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10"
                       onError={(e) => {
                         const target = e.target as HTMLImageElement;
-                        if (!target.src.endsWith('0.jpg')) {
-                          target.src = `https://img.youtube.com/vi/${room.videoId}/0.jpg`;
+                        if (room.mediaType === 'youtube') {
+                          if (!target.src.endsWith('0.jpg')) {
+                            target.src = `https://img.youtube.com/vi/${room.videoId}/0.jpg`;
+                          } else {
+                            target.src = 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop';
+                          }
                         } else {
                           target.src = 'https://images.unsplash.com/photo-1614680376593-902f74cf0d41?q=80&w=400&auto=format&fit=crop';
                         }
@@ -1717,7 +1744,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     <h3 className="text-xl sm:text-2xl font-black tracking-tight truncate w-full px-4">
                       {room.title || room.name || "Music Jam"}
                     </h3>
-                    <p className="text-blue-400 font-bold text-[10px] uppercase tracking-[0.2em]">YT Music Mode</p>
+                    <p className="text-blue-400 font-bold text-[10px] uppercase tracking-[0.2em]">Music Mode</p>
                   </div>
 
                   <div className="w-full px-8 z-50">
@@ -2010,6 +2037,9 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-3 min-w-0">
                           <span className="text-[10px] font-mono text-zinc-600">{idx + 1}</span>
+                          {item.thumbnailUrl && (
+                            <img src={item.thumbnailUrl} alt="" className="w-8 h-8 object-cover rounded-md shrink-0" />
+                          )}
                           <div className="min-w-0">
                             <p className="text-xs font-bold truncate">{item.title}</p>
                             <p className="text-[10px] text-zinc-500">Added by {item.addedByName}</p>
