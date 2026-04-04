@@ -40,6 +40,26 @@ app.get('/api/proxy/oembed', async (req, res) => {
   }
 });
 
+app.use('/api/tidal', async (req, res) => {
+  const targetUrl = `https://hifi-api-production.up.railway.app${req.url}`;
+  try {
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body)
+    });
+    
+    const data = await response.text();
+    res.status(response.status).send(data);
+  } catch (error: any) {
+    console.error("Tidal proxy failed:", error.message);
+    res.status(500).json({ error: "Tidal proxy failed" });
+  }
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

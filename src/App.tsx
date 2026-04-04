@@ -424,7 +424,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
     if (!videoUrl.trim()) return;
     
     // If it's a direct URL, just create room
-    if (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be') || videoUrl.includes('soundcloud.com')) {
+    if (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be')) {
       handleCreateRoom();
       return;
     }
@@ -434,7 +434,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
 
     try {
       const searchUrl = lobbyType === 'music'
-        ? `https://hifi-api-production.up.railway.app/search/?s=${encodeURIComponent(videoUrl)}`
+        ? `/api/tidal/search/?s=${encodeURIComponent(videoUrl)}`
         : `https://yt-search-nine.vercel.app/search?q=${encodeURIComponent(videoUrl)}`;
       
       const response = await fetch(searchUrl);
@@ -501,14 +501,9 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
           return;
         }
       } else {
-        finalMusicUrl = extractSoundCloudUrl(videoUrl) || "";
-        if (!finalMusicUrl) {
-          finalVid = extractVideoId(videoUrl) || "";
-          if (!finalVid) {
-            alert("Please enter a valid YouTube or SoundCloud URL");
-            return;
-          }
-        }
+        // For music mode, we don't support direct URLs yet, only search
+        alert("Please search for a song instead of pasting a URL");
+        return;
       }
     }
 
@@ -598,7 +593,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (id: string, type?: 'youtube' | 'mu
                 <div className="relative">
                   <input
                     type="text"
-                    placeholder={lobbyType === 'youtube' ? "Search or paste YouTube URL" : "Search or paste SoundCloud URL"}
+                    placeholder={lobbyType === 'youtube' ? "Search or paste YouTube URL" : "Search or paste Music URL"}
                     value={videoUrl}
                     onChange={(e) => setVideoUrl(e.target.value)}
                     onFocus={() => {
@@ -780,26 +775,37 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
 
   useEffect(() => {
     let interval: any;
-    if (room?.isPlaying && player && !isDragging) {
+    if (room?.isPlaying && !isDragging) {
       interval = setInterval(() => {
         try {
-          const current = player.getCurrentTime();
-          const dur = player.getDuration();
-          if (current !== undefined) setLocalProgress(current);
-          if (dur !== undefined && dur > 0) setDuration(dur);
+          if (room.mediaType === 'youtube' && player) {
+            const current = player.getCurrentTime();
+            const dur = player.getDuration();
+            if (current !== undefined) setLocalProgress(current);
+            if (dur !== undefined && dur > 0) setDuration(dur);
+          } else if (room.mediaType === 'music' && audioRef.current) {
+            const current = audioRef.current.currentTime;
+            const dur = audioRef.current.duration;
+            if (current !== undefined) setLocalProgress(current);
+            if (dur !== undefined && dur > 0 && !isNaN(dur)) setDuration(dur);
+          }
         } catch (e) {}
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [room?.isPlaying, player, isDragging]);
+  }, [room?.isPlaying, room?.mediaType, player, isDragging]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     setLocalProgress(parseFloat(e.target.value));
   };
 
   const handleSeekCommit = async () => {
-    if (player) {
+    if (room?.mediaType === 'youtube' && player) {
       player.seekTo(localProgress, true);
+      await updateRoomState({ currentTime: localProgress });
+      addActivity('seek', `to ${Math.floor(localProgress)}s`);
+    } else if (room?.mediaType === 'music' && audioRef.current) {
+      audioRef.current.currentTime = localProgress;
       await updateRoomState({ currentTime: localProgress });
       addActivity('seek', `to ${Math.floor(localProgress)}s`);
     }
@@ -875,7 +881,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
         setRoom(data);
         
         // Sync Media - Fix for background tabs and refresh
-        if ((data.mediaType === 'youtube' || data.mediaType === 'music') && player) {
+        if (data.mediaType === 'youtube' && player) {
           try {
             const playerState = player.getPlayerState();
             const isPlayerPlaying = playerState === YouTube.PlayerState.PLAYING;
@@ -908,6 +914,37 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
             }
           } catch (error) {
             console.error("Player sync error:", error);
+          }
+        } else if (data.mediaType === 'music' && audioRef.current) {
+          try {
+            const isPlayerPlaying = !audioRef.current.paused;
+            
+            if (data.isPlaying && !isPlayerPlaying) {
+              audioRef.current.play().catch(e => console.error("Audio play error:", e));
+            } else if (!data.isPlaying && isPlayerPlaying) {
+              audioRef.current.pause();
+            }
+
+            const localTime = audioRef.current.currentTime || 0;
+            let targetTime = data.currentTime;
+
+            if (data.isPlaying && data.lastUpdated) {
+              const lastUpdated = data.lastUpdated.toMillis();
+              const now = Date.now();
+              const drift = (now - lastUpdated) / 1000;
+              targetTime += drift;
+            }
+
+            const isFirstSync = !hasSyncedRef.current;
+            const isOthersUpdate = data.updatedBy !== auth.currentUser?.uid;
+            const isSignificantDrift = Math.abs(localTime - targetTime) > 2;
+
+            if (isFirstSync || (isOthersUpdate && isSignificantDrift)) {
+              audioRef.current.currentTime = targetTime;
+              hasSyncedRef.current = true;
+            }
+          } catch (error) {
+            console.error("Audio sync error:", error);
           }
         }
       } else {
@@ -974,22 +1011,29 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
   }, [messages]);
 
   useEffect(() => {
-    if (!room?.isPlaying || !player || !roomId || !auth.currentUser) return;
+    if (!room?.isPlaying || !roomId || !auth.currentUser) return;
     
     // Only the "leader" (first participant) updates the time periodically to avoid conflicts
     if (participants[0]?.uid !== auth.currentUser.uid) return;
 
     const interval = setInterval(() => {
       try {
-        const currentTime = player.getCurrentTime();
-        if (currentTime !== undefined) {
-          updateRoomState({ currentTime });
+        if (room.mediaType === 'youtube' && player) {
+          const currentTime = player.getCurrentTime();
+          if (currentTime !== undefined) {
+            updateRoomState({ currentTime });
+          }
+        } else if (room.mediaType === 'music' && audioRef.current) {
+          const currentTime = audioRef.current.currentTime;
+          if (currentTime !== undefined) {
+            updateRoomState({ currentTime });
+          }
         }
       } catch (e) {}
     }, 10000); // Update every 10s to keep time fresh for new joiners
 
     return () => clearInterval(interval);
-  }, [room?.isPlaying, player, roomId, participants]);
+  }, [room?.isPlaying, room?.mediaType, player, roomId, participants]);
 
   const addToQueue = async (val: string) => {
     if (!val.trim()) return;
@@ -1358,46 +1402,48 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     e.preventDefault();
     if (!searchInput.trim()) return;
 
-    // Check for direct URL or Playlist
-    const vid = extractVideoId(searchInput);
-    const pid = extractPlaylistId(searchInput);
-    
-    if (pid) {
-      setIsSearching(true);
-      const items = await fetchPlaylistItems(pid);
-      setIsSearching(false);
-      if (items.length > 0) {
-        if (!room?.videoId) {
-          await selectSearchResult(items[0]);
-          for (let i = 1; i < items.length; i++) {
-            await addToQueueFromResult(items[i]);
+    // Check for direct URL or Playlist (only for YouTube)
+    if (room?.mediaType === 'youtube') {
+      const vid = extractVideoId(searchInput);
+      const pid = extractPlaylistId(searchInput);
+      
+      if (pid) {
+        setIsSearching(true);
+        const items = await fetchPlaylistItems(pid);
+        setIsSearching(false);
+        if (items.length > 0) {
+          if (!room?.videoId) {
+            await selectSearchResult(items[0]);
+            for (let i = 1; i < items.length; i++) {
+              await addToQueueFromResult(items[i]);
+            }
+          } else {
+            for (const item of items) {
+              await addToQueueFromResult(item);
+            }
           }
+          setSearchInput('');
+          addToast(`Added ${items.length} items from playlist`);
+          return;
+        }
+      } else if (vid) {
+        if (isAutoQueue) {
+          await addToQueue(searchInput);
         } else {
-          for (const item of items) {
-            await addToQueueFromResult(item);
-          }
+          // Try to fetch title for direct link
+          let title = "Direct Link";
+          try {
+            const response = await fetch(`/api/proxy/oembed?url=https://www.youtube.com/watch?v=${vid}`);
+            if (response.ok) {
+              const data = await response.json();
+              title = data.title || title;
+            }
+          } catch (e) {}
+          await selectSearchResult({ id: vid, title, thumbnail: `https://img.youtube.com/vi/${vid}/0.jpg` });
         }
         setSearchInput('');
-        addToast(`Added ${items.length} items from playlist`);
         return;
       }
-    } else if (vid) {
-      if (isAutoQueue) {
-        await addToQueue(searchInput);
-      } else {
-        // Try to fetch title for direct link
-        let title = "Direct Link";
-        try {
-          const response = await fetch(`/api/proxy/oembed?url=https://www.youtube.com/watch?v=${vid}`);
-          if (response.ok) {
-            const data = await response.json();
-            title = data.title || title;
-          }
-        } catch (e) {}
-        await selectSearchResult({ id: vid, title, thumbnail: `https://img.youtube.com/vi/${vid}/0.jpg` });
-      }
-      setSearchInput('');
-      return;
     }
 
     setIsSearching(true);
@@ -1406,7 +1452,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     try {
       // Using the user's custom yt-search backend directly (CORS fixed)
       const searchUrl = room?.mediaType === 'music'
-        ? `https://hifi-api-production.up.railway.app/search/?s=${encodeURIComponent(searchInput)}`
+        ? `/api/tidal/search/?s=${encodeURIComponent(searchInput)}`
         : `https://yt-search-nine.vercel.app/search?q=${encodeURIComponent(searchInput)}`;
 
       const response = await fetch(searchUrl);
@@ -1475,7 +1521,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
     if (room?.mediaType === 'music' && room.musicUrl) {
       const fetchStream = async () => {
         try {
-          const response = await fetch(`https://hifi-api-production.up.railway.app/track/?id=${room.musicUrl}&quality=LOSSLESS`);
+          const response = await fetch(`/api/tidal/track/?id=${room.musicUrl}&quality=LOSSLESS`);
           const data = await response.json();
           const decoded = JSON.parse(atob(data.data.manifest));
           const tidalUrl = decoded.urls[0];
@@ -1652,6 +1698,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                         </div>
                         <div className="flex gap-2 opacity-0 group-hover/item:opacity-100 transition-opacity">
                           <button 
+                            type="button"
                             onClick={() => selectSearchResult(result)}
                             className="p-2 bg-zinc-100 text-black rounded-lg hover:bg-white transition-colors"
                             title="Play Now"
@@ -1659,6 +1706,7 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                             <Play size={14} fill="currentColor" />
                           </button>
                           <button 
+                            type="button"
                             onClick={() => addToQueueFromResult(result)}
                             className="p-2 bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 transition-colors"
                             title="Add to Queue"
@@ -1702,6 +1750,11 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                   src={musicStreamUrl || undefined}
                   onPlay={() => updateRoomState({ isPlaying: true })}
                   onPause={() => updateRoomState({ isPlaying: false })}
+                  onEnded={() => {
+                    if (participants[0]?.uid === auth.currentUser?.uid) {
+                      playNext();
+                    }
+                  }}
                   className="hidden"
                 />
                 {/* Background Glow */}
@@ -1788,19 +1841,29 @@ const Room = ({ roomId, onLeave }: { roomId: string; onLeave: () => void }) => {
                     </button>
                     <button
                       onClick={() => {
-                        if (!player) return;
-                        if (room.isPlaying) {
-                          player.pauseVideo();
-                          updateRoomState({ isPlaying: false });
-                        } else {
-                          player.playVideo();
-                          updateRoomState({ isPlaying: true });
+                        if (room.mediaType === 'youtube') {
+                          if (!player) return;
+                          if (room.isPlaying) {
+                            player.pauseVideo();
+                            updateRoomState({ isPlaying: false });
+                          } else {
+                            player.playVideo();
+                            updateRoomState({ isPlaying: true });
+                          }
+                        } else if (room.mediaType === 'music') {
+                          if (room.isPlaying) {
+                            audioRef.current?.pause();
+                            updateRoomState({ isPlaying: false });
+                          } else {
+                            audioRef.current?.play();
+                            updateRoomState({ isPlaying: true });
+                          }
                         }
                       }}
-                      disabled={!player}
+                      disabled={room.mediaType === 'youtube' && !player}
                       className={cn(
                         "w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center bg-white text-black rounded-full hover:scale-110 transition-all shadow-[0_0_50px_rgba(255,255,255,0.2)] active:scale-95",
-                        !player && "opacity-50 cursor-not-allowed"
+                        (room.mediaType === 'youtube' && !player) && "opacity-50 cursor-not-allowed"
                       )}
                     >
                       {room.isPlaying ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" className="ml-1" />}
